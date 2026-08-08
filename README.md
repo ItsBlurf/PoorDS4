@@ -7,14 +7,14 @@
 > [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) and the remote-syscall
 > interface documented by [kstuff-lite](https://github.com/EchoStretch/kstuff-lite).
 
-PoorDS4 lets a wireless DualShock 4 already paired with a jailbroken PS5
+PoorDS4 lets a wireless DualShock 4 paired with a jailbroken PS5
 control native PS5 games. It does not require USB, a DualSense, a second user,
 or a profile-selection prompt. Native DualSense controllers remain on Sony's
 original input path and can be used independently for local multiplayer.
 
 This is experimental homebrew that modifies a running game's pad imports.
 Compatibility checks fail closed, but untested firmware and games can still
-crash. Save your work before testing.
+crash. Save your gamesave before testing (it broke the save file of a game during very early builds testings, never happened again but there is stil the risk so this is your disclaimer to save your work).
 
 ## Requirements
 
