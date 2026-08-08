@@ -1,105 +1,127 @@
-# Ghostcontrol — by StonedModder
+# PoorDS4
 
-If you enjoy my work - please consider donating to my BTC address: 
+> PoorDS4 would not have been possible without the excellent work behind
+> [Ghostcontrol](https://github.com/StonedModder/Ghostcontrol-PS5-USB-Controller-Patcher)
+> by StonedModder. Its controller research and PS5 payload foundation made this
+> project possible. PoorDS4 also relies on the
+> [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) and the remote-syscall
+> interface documented by [kstuff-lite](https://github.com/EchoStretch/kstuff-lite).
 
-`bc1qa9zfgnccajsw8vg7k287qz5a7apf8pefj5jjx5`
+PoorDS4 lets a wireless DualShock 4 already paired with a jailbroken PS5
+control native PS5 games. It does not require USB, a DualSense, a second user,
+or a profile-selection prompt. Native DualSense controllers remain on Sony's
+original input path and can be used independently for local multiplayer.
 
-
-Use third-party USB controllers on PS5. Reads USB HID input from a plugged-in controller and injects it into a virtual DualSense via the PS5's `scePadVirtualDeviceInsertData` path (Ghostpad VDI path).
-
-**Tested controller:** 8BitDo Ultimate 2 in Nintendo Switch Pro Controller mode (VID=0x057e PID=0x2009)
-
----
-
-
-
-https://github.com/user-attachments/assets/6583b1c2-3d3d-4f2e-9e79-689121fea4a3
-
-
-
-## Features
-
-- 60Hz input streaming from USB HID controller → virtual DualSense
-- PS5 notifications: startup, controller connect/disconnect, detected controller type
-- User assignment: virtual DualSense is bound to the foreground user on startup
-- Full button mapping: face buttons, triggers, sticks, dpad, L3/R3, PS button
-- Auto-reconnect on controller unplug/replug
-
----
+This is experimental homebrew that modifies a running game's pad imports.
+Compatibility checks fail closed, but untested firmware and games can still
+crash. Save your work before testing.
 
 ## Requirements
 
-- PS5 with kernel exploit (tested on jailbroken PS5)
-- [ps5-payload-sdk](https://github.com/ps5-payload-dev/sdk)
-- USB controller — see supported list below
+- A jailbroken PS5 with a compatible HEN/kstuff environment and ELF loader.
+- A wireless DualShock 4 paired with the PS5 and connected to a logged-in user.
+- Firmware 11.60 for the currently live-tested configuration. See
+  [firmware support](docs/FIRMWARE_SUPPORT.md) before testing another version.
 
----
+## Quick start
 
-## Supported Controllers
+1. Download `PoorDS4rc36.elf` from the latest release.
+2. Connect the DS4 to the PS5 user that should control the game.
+3. Send the ELF once to the console's payload loader. The game may already be
+   running or may be launched afterward.
+4. Wait for the `wireless DS4 active` notification, then play normally.
 
-**Full matrix:** [Supported_controllers.md](Supported_controllers.md) — detection rules, endpoints, ignored devices, and Manba vs 8BitDo notes.
+Only run one automatic instance. PoorDS4 follows later game launches without
+reinjection. It performs safe cleanup before rest mode; reinject after waking.
+Use `PoorDS4-stop.elf` before replacing a running build.
 
-| Controller | Mode | VID:PID | Status |
-|-----------|------|---------|--------|
-| 8BitDo Ultimate 2 | Nintendo Switch Pro | 057e:2009 | ✅ Working |
-| 8BitDo Ultimate 2 | Native | 2dc8:310b | Untested |
-| 8BitDo Ultimate 2C Wireless (81HD) | XInput | 2dc8:310a | ✅ Working |
+## Controller compatibility
 
-See [othercontrollersGuide.md](othercontrollersGuide.md) for adding new controllers.
+The source reader recognizes Sony DS4 v1 (`054c:05c4`), DS4 v2
+(`054c:09cc`), and Sony's wireless adapter (`054c:0ba0`). It also accepts a
+controller when the PS5's `scePadIsDS4Connected` API positively identifies it
+as a DS4. Genuine Sony wireless DS4 revisions are supported; third-party
+clones and adapters with different identities require testing.
 
----
+One DS4 is translated per PoorDS4 instance. The selected DS4 may be the first,
+second, or later connected controller, provided the game's pad table contains
+one unambiguous destination slot.
+
+## How it works
+
+1. Enumerate the logged-in and Invite users' pad slots.
+2. Identify a live DS4 through public device metadata and Sony's DS4 API.
+3. Read its 120-byte `ScePadData` state at 120 Hz in `SceRemotePlay`.
+4. Wait for one fully initialized native game process.
+5. Validate the game's pad ABI, client table, player slot, import owners, and
+   target mappings before changing anything.
+6. Redirect only validated pad imports to a game-owned anonymous mapping and
+   publish translated frames through a double buffer.
+
+The game is never ptraced, stopped, or used to run a borrowed thread. No eboot
+or `libScePad` code page is patched, and no game heap, socket, or thread is
+created. See the [architecture document](docs/ARCHITECTURE.md) for the exact
+safety and cleanup invariants.
+
+## Firmware compatibility
+
+| Firmware | Status |
+| --- | --- |
+| 11.60 (`0x11600005`) | Live-tested with multiple games, reconnects, game switching, multiplayer, and rest cleanup |
+| 12.40 (`0x12400009`) | Exact manifest verified from supplied reports; RC36 hardware test still required |
+| Other | Eligible only after all runtime structural checks pass; hardware-unverified |
+
+Compatibility is based on proven ABI structure, not a broad `11.xx` or `12.xx`
+version assumption. Unknown layouts fail closed and produce a report instead
+of installing hooks. See [docs/FIRMWARE_SUPPORT.md](docs/FIRMWARE_SUPPORT.md).
 
 ## Build
 
-```sh
-export PS5_PAYLOAD_SDK=/path/to/ps5-payload-sdk
-make clean all
-```
-
-Output: `ghost-control-ps5.elf`
-
-## Deploy
+Install the official [ps5-payload-sdk](https://github.com/ps5-payload-dev/sdk),
+set `PS5_PAYLOAD_SDK`, then build from the repository root:
 
 ```sh
-# Deploy to PS5 (replace IP)
-nc -w 5 192.168.1.xxx 9021 < ghost-control-ps5.elf
+make -C payload clean
+make -C payload all status stop
 ```
 
-Or set `PS5_HOST` in your environment:
-```sh
-make deploy PS5_HOST=192.168.1.xxx
+On the Windows PS5 development workspace used for release builds, load the
+environment and select its target wrapper explicitly:
+
+```powershell
+. .\ps5dev-env.ps1
+make -C payload CC=ps5-clang.cmd clean
+make -C payload CC=ps5-clang.cmd all status stop audit
 ```
 
----
+RC36 release assets use ps5-payload-sdk v0.42:
 
-## How It Works
+| Output | Purpose |
+| --- | --- |
+| `PoorDS4rc36.elf` | Automatic wireless DS4 bridge |
+| `PoorDS4-status.elf` | Read-only bridge status snapshot |
+| `PoorDS4-stop.elf` | Cooperative stop request |
 
-1. **VDA**: Creates a virtual DualSense via `scePadVirtualDeviceAddDevice(type=3)`
-2. **klog capture**: Monitors klogsrv TCP to detect the `DEVICE_ADDED` event and get the device handle
-3. **force_bind**: Binds the virtual device to the foreground user via ShellUI MBus IPC
-4. **USB HID thread**: Detaches `usb_hid0` from the controller, opens raw USB FS endpoints, runs the Nintendo Switch Pro Controller USB handshake, then reads 60Hz input reports
-5. **VDI inject**: Parses HID reports into `ScePadData` and calls `scePadVirtualDeviceInsertData` at 60Hz
+## Logs and compatibility reports
 
-See `ProControllerResearch.md` for the full research documentation on the USB HID protocol.
+Diagnostics are stored under `/data/poords4/`:
 
----
+- `game-pad-bridge.log` and `game-pad-bridge.log.1`
+- `game-pad-bridge-supervisor.txt`
+- `game-pad-bridge-last.txt`
+- `game-pad-bridge-status.txt` after running the status ELF
+- `reports/source-fw-XXXXXXXX-pid-N.txt`
+- `reports/fw-XXXXXXXX-pid-N.txt`
 
-## Files
+For a firmware or game incompatibility, copy the complete `/data/poords4/`
+directory and include the steps that reproduced the failure. Source and game
+reports identify `poords4_rc` and `report_schema`. Review reports before posting
+them publicly because they contain runtime process addresses and controller
+diagnostics.
 
-| File | Description |
-|------|-------------|
-| `gc_main.c` | Main payload — VDA, VDI, USB HID thread, button parsing |
-| `shellui_pad.c` | ShellUI PT_ATTACH helper for force_bind via MBus |
-| `shellui_pad.h` | Header for shellui_pad |
-| `Makefile` | Build system |
-| `ghost-control-ps5.elf` | Pre-compiled payload (deploy directly) |
-| `ProControllerResearch.md` | Full USB protocol research for Nintendo Switch Pro Controller |
-| `Supported_controllers.md` | Compatibility matrix (source of truth) |
-| `CHANGELOG.md` | Release history |
-| `othercontrollersGuide.md` | Guide for adding other USB HID controllers |
+## Attribution and license
 
----
-
-## License
-
-GPL-3.0-or-later
+PoorDS4 is a focused wireless-DS4 derivative of Ghostcontrol. The original USB
+implementations and binaries are intentionally not distributed in this tree.
+See [NOTICE.md](NOTICE.md) for detailed credits and [LICENSE](LICENSE) for the
+GPL-3.0-or-later terms.
