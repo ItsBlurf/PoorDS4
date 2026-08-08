@@ -1,6 +1,6 @@
 # Firmware support
 
-PoorDS4 RC36 separates firmware-independent DS4 discovery from the
+PoorDS4 RC37 separates firmware-independent DS4 discovery from the
 firmware-sensitive game bridge. It never assumes that a whole numbered family
 such as `11.xx` or `12.xx` shares private `libScePad` internals.
 
@@ -50,7 +50,7 @@ the supervisor retries transient launch snapshots five times.
 | Firmware | Admission | Current evidence |
 | --- | --- | --- |
 | 11.60 (`0x11600005`) | Exact and structural | Live: JoJo menu/battle/relaunch, Pragmata, FC26, Tekken, both DS4/DS5 connection orders, separate P1/P2, reconnect, game switching, rest cleanup, and stale recovery |
-| 12.40 (`0x12400009`) | Exact | All supplied reports agree on the six offsets/hashes and wrapper relationships; RC36 no-ptrace hardware run is still outstanding |
+| 12.40 (`0x12400009`) | Exact | All supplied reports agree on the six offsets/hashes and wrapper relationships; RC37 no-ptrace hardware run is still outstanding |
 | Other | Structural only | Eligible by runtime proof; hardware-unverified until a report and controller test are supplied |
 
 “Eligible” is intentionally different from “guaranteed.” Firmware with the

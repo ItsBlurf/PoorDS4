@@ -25,7 +25,7 @@ crash. Save your work before testing.
 
 ## Quick start
 
-1. Download `PoorDS4rc36.elf` from the latest release.
+1. Download `PoorDS4rc37.elf` from the latest release.
 2. Connect the DS4 to the PS5 user that should control the game.
 3. Send the ELF once to the console's payload loader. The game may already be
    running or may be launched afterward.
@@ -68,7 +68,7 @@ safety and cleanup invariants.
 | Firmware | Status |
 | --- | --- |
 | 11.60 (`0x11600005`) | Live-tested with multiple games, reconnects, game switching, multiplayer, and rest cleanup |
-| 12.40 (`0x12400009`) | Exact manifest verified from supplied reports; RC36 hardware test still required |
+| 12.40 (`0x12400009`) | Exact manifest verified from supplied reports; RC37 hardware test still required |
 | Other | Eligible only after all runtime structural checks pass; hardware-unverified |
 
 Compatibility is based on proven ABI structure, not a broad `11.xx` or `12.xx`
@@ -94,11 +94,11 @@ make -C payload CC=ps5-clang.cmd clean
 make -C payload CC=ps5-clang.cmd all status stop audit
 ```
 
-RC36 release assets use ps5-payload-sdk v0.42:
+RC37 release assets use ps5-payload-sdk v0.42:
 
 | Output | Purpose |
 | --- | --- |
-| `PoorDS4rc36.elf` | Automatic wireless DS4 bridge |
+| `PoorDS4rc37.elf` | Automatic wireless DS4 bridge |
 | `PoorDS4-status.elf` | Read-only bridge status snapshot |
 | `PoorDS4-stop.elf` | Cooperative stop request |
 

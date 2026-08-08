@@ -16,8 +16,22 @@ $bridge = [IO.File]::ReadAllText(
 $makefile = [IO.File]::ReadAllText(
     (Join-Path $repo 'payload\Makefile'))
 
-Assert-True ($makefile.Contains('RC_VERSION := 36')) `
-    'Makefile RC version is not 36.'
+Assert-True ($makefile.Contains('RC_VERSION := 37')) `
+    'Makefile RC version is not 37.'
+Assert-True (-not $makefile.Contains('-lScePad')) `
+    'Build still links libScePad despite using runtime-resolved game exports.'
+Assert-True (-not $makefile.Contains('-lpthread')) `
+    'Build still links pthread despite using runtime-resolved game functions.'
+Assert-True (-not $makefile.Contains('-ldl')) `
+    'Build still links libdl without a direct import.'
+Assert-True ($makefile.Contains(
+    'RUNTIME_LIBS := -nodefaultlibs -lc -lkernel_web -lSceLibcInternal')) `
+    'Build does not declare its minimal SDK runtime dependencies.'
+Assert-True ($makefile.Contains(
+    'BRIDGE_LIBS  := $(RUNTIME_LIBS) -lSceUserService')) `
+    'Automatic payload is missing its direct user-service dependency.'
+Assert-True (-not $makefile.Contains('-lSceNet')) `
+    'Build still links the SDK networking library without a network import.'
 Assert-True ($makefile.Contains('TARGET        := PoorDS4rc$(RC_VERSION).elf')) `
     'Automatic payload does not use the PoorDS4 release name.'
 Assert-True ($makefile.Contains('STATUS_TARGET := PoorDS4-status.elf')) `

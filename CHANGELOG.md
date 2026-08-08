@@ -3,6 +3,17 @@
 All notable changes to this project are documented here. Release tags follow
 Semantic Versioning; wireless-bridge candidates use `0.1.0-rcN`.
 
+## [0.1.0-rc37] - 2026-08-08
+
+### Changed
+
+- Remove unused `libScePad`, `libSceNet`, pthread, and dynamic-loader link
+  inputs. The automatic payload now adds only its direct user-service
+  dependency; the status and stop utilities use only the SDK runtime libraries
+  they import.
+- Add build-audit assertions that prevent those unrelated dependencies from
+  returning to future release payloads.
+
 ## [0.1.0-rc36] - 2026-08-08
 
 ### Changed
