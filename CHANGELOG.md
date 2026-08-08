@@ -3,6 +3,34 @@
 All notable changes to this project are documented here. Release tags follow
 Semantic Versioning; wireless-bridge candidates use `0.1.0-rcN`.
 
+## [0.1.0-rc38] - 2026-08-09
+
+### Fixed
+
+- Route a DS4 by the unique `(user ID, pad index)` game-table identity when a
+  title preallocates multiple disconnected pad entries. This restores
+  Pragmata without returning to the index-only selection that could take over
+  the wrong user's controller in multiplayer.
+- Add the exact 8.60 (`0x08600004`) six-export manifest captured from a
+  supplied RC37 source report. Runtime structural admission and fail-closed
+  checks remain mandatory.
+
+### Changed
+
+- Extend compatibility reports to schema 5 with each game entry's user ID and
+  source-identity candidate counts.
+- Use deterministic SHA-1 ELF build IDs so repeated clean release builds are
+  byte-identical and asset checksums are reproducible.
+- Strip DWARF data from public release ELFs so workstation paths and user names
+  are not embedded in downloadable assets.
+
+### Verified
+
+- On 11.60, one RC38 injection followed Pragmata, JoJo, and FC26 consecutively.
+  Pragmata dismissed its controller prompt and accepted input, JoJo entered a
+  battle, and FC26 reached gameplay. All three sessions published input with
+  no write or bridge-health failures.
+
 ## [0.1.0-rc37] - 2026-08-08
 
 ### Changed

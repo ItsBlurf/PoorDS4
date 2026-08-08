@@ -1,6 +1,6 @@
 PS5_HOST ?=
 PORT     ?= 9021
-RC_VERSION := 37
+RC_VERSION := 38
 
 TARGET        := PoorDS4rc$(RC_VERSION).elf
 STATUS_TARGET := PoorDS4-status.elf
@@ -14,12 +14,13 @@ include $(PS5_PAYLOAD_SDK)/toolchain/prospero.mk
 
 CFLAGS  += -D__PROSPERO__ -Wall -Wextra -Wshadow -Wunreachable-code \
 	-Werror -g -O2 -fPIC \
-	-fno-stack-protector -ffunction-sections -fdata-sections
-LDFLAGS      += -Wl,--gc-sections
+	-fno-stack-protector -ffunction-sections -fdata-sections \
+	-fdebug-compilation-dir=.
+LDFLAGS      += -Wl,--gc-sections,--build-id=sha1
 RUNTIME_LIBS := -nodefaultlibs -lc -lkernel_web -lSceLibcInternal
 BRIDGE_LIBS  := $(RUNTIME_LIBS) -lSceUserService
 
-.PHONY: all audit clean deploy status stop
+.PHONY: all audit clean deploy release status stop
 
 all: $(TARGET)
 
@@ -39,6 +40,9 @@ stop: $(STOP_TARGET)
 
 $(STOP_TARGET): stop_game_pad_bridge_main.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(RUNTIME_LIBS)
+
+release: all status stop
+	$(STRIP) --strip-debug $(TARGET) $(STATUS_TARGET) $(STOP_TARGET)
 
 audit:
 	powershell -NoProfile -ExecutionPolicy Bypass \

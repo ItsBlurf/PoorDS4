@@ -27,7 +27,7 @@ crash. Save your gamesave before testing (it broke the save file of a game durin
 
 ## Quick start
 
-1. Download `PoorDS4rc37.elf` from the latest release.
+1. Download `PoorDS4rc38.elf` from the latest release.
 2. Connect the DS4 to the PS5 user that should control the game.
 3. Send the ELF once to the console's payload loader. The game may already be
    running or may be launched afterward.
@@ -69,8 +69,9 @@ safety and cleanup invariants.
 
 | Firmware | Status |
 | --- | --- |
+| 8.60 (`0x08600004`) | Exact manifest derived from a supplied RC37 source report; RC38 hardware test required |
 | 11.60 (`0x11600005`) | Live-tested with multiple games, reconnects, game switching, multiplayer, and rest cleanup |
-| 12.40 (`0x12400009`) | Exact manifest verified from supplied reports; RC37 hardware test still required |
+| 12.40 (`0x12400009`) | Exact manifest verified from supplied reports; RC38 hardware test still required |
 | Other | Eligible only after all runtime structural checks pass; hardware-unverified |
 
 Compatibility is based on proven ABI structure, not a broad `11.xx` or `12.xx`
@@ -84,7 +85,7 @@ set `PS5_PAYLOAD_SDK`, then build from the repository root:
 
 ```sh
 make -C payload clean
-make -C payload all status stop
+make -C payload release
 ```
 
 On the Windows PS5 development workspace used for release builds, load the
@@ -93,14 +94,14 @@ environment and select its target wrapper explicitly:
 ```powershell
 . .\ps5dev-env.ps1
 make -C payload CC=ps5-clang.cmd clean
-make -C payload CC=ps5-clang.cmd all status stop audit
+make -C payload CC=ps5-clang.cmd release audit
 ```
 
-RC37 release assets use ps5-payload-sdk v0.42:
+RC38 release assets use ps5-payload-sdk v0.42:
 
 | Output | Purpose |
 | --- | --- |
-| `PoorDS4rc37.elf` | Automatic wireless DS4 bridge |
+| `PoorDS4rc38.elf` | Automatic wireless DS4 bridge |
 | `PoorDS4-status.elf` | Read-only bridge status snapshot |
 | `PoorDS4-stop.elf` | Cooperative stop request |
 

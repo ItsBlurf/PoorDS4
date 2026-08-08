@@ -29,7 +29,7 @@ It then applies a 1.5-second launch grace and validates:
 - each caller-owned PLT relocation and its current original destination;
 - a runtime-proven virtual-to-physical mapping path before direct writes.
 
-Exact 11.60 and 12.40 manifests provide additional evidence but do not supply
+Exact 8.60, 11.60, and 12.40 manifests provide additional evidence but do not supply
 the addresses used by the bridge. Unknown versions must pass the same
 structural checks.
 
@@ -49,10 +49,13 @@ original path.
 ## Player selection
 
 Pad indices are local to a PS5 user and cannot identify global P1/P2 ordering.
-PoorDS4 therefore inspects the game's global table. It prefers one exact
-DS4 entry, otherwise one disconnected DS4-facing entry, and finally one sole
-entry. Multiple plausible destinations fail closed so a native DualSense is
-never silently taken over.
+PoorDS4 therefore inspects the game's global table. It prefers one exact DS4
+entry, then one disconnected entry matching both the source user and local pad
+index, otherwise one unique disconnected entry, and finally one sole entry.
+The user/index pair disambiguates titles that preallocate multiple inactive
+slots without treating a local index as global. Multiple remaining candidates
+fail closed; a sole connected entry must also match the source identity so a
+native DualSense is never silently taken over.
 
 ## Cleanup and recovery
 

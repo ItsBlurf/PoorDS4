@@ -16,8 +16,8 @@ $bridge = [IO.File]::ReadAllText(
 $makefile = [IO.File]::ReadAllText(
     (Join-Path $repo 'payload\Makefile'))
 
-Assert-True ($makefile.Contains('RC_VERSION := 37')) `
-    'Makefile RC version is not 37.'
+Assert-True ($makefile.Contains('RC_VERSION := 38')) `
+    'Makefile RC version is not 38.'
 Assert-True (-not $makefile.Contains('-lScePad')) `
     'Build still links libScePad despite using runtime-resolved game exports.'
 Assert-True (-not $makefile.Contains('-lpthread')) `
@@ -30,6 +30,9 @@ Assert-True ($makefile.Contains(
 Assert-True ($makefile.Contains(
     'BRIDGE_LIBS  := $(RUNTIME_LIBS) -lSceUserService')) `
     'Automatic payload is missing its direct user-service dependency.'
+Assert-True ($makefile.Contains(
+    '$(STRIP) --strip-debug $(TARGET) $(STATUS_TARGET) $(STOP_TARGET)')) `
+    'Release target does not remove workstation paths from DWARF data.'
 Assert-True (-not $makefile.Contains('-lSceNet')) `
     'Build still links the SDK networking library without a network import.'
 Assert-True ($makefile.Contains('TARGET        := PoorDS4rc$(RC_VERSION).elf')) `
@@ -80,7 +83,20 @@ Assert-True ($readerGate -ge 0 -and $gameInstall -gt $readerGate) `
     'Game installation is not ordered after the reader validation gate.'
 Assert-True ($bridge.Contains('source_runtime_abi_match')) `
     'Runtime controller-information ABI evidence is missing.'
-Assert-True ($bridge.Contains('poords4_rc=%d\nreport_schema=4')) `
+Assert-True ($bridge.Contains('POORDS4_GAME_BRIDGE_FW_0860')) `
+    'Firmware 8.60 exact-manifest support is missing.'
+Assert-True ($bridge.Contains('source-user-index-inactive')) `
+    'Multi-slot game routing lacks the source user/index fallback.'
+Assert-True ($bridge.Contains(
+    'user_id == source_user_id &&')) `
+    'Multi-slot routing does not bind the candidate to the DS4 user.'
+Assert-True ($bridge.Contains(
+    'ds4_count == 0u && identity_count == 1u &&')) `
+    'Ambiguous duplicate user/index identities do not fail closed.'
+Assert-True ($bridge.Contains(
+    'active_count == 1u && identity_count == 1u')) `
+    'Sole active fallback is not bound to the source controller identity.'
+Assert-True ($bridge.Contains('poords4_rc=%d\nreport_schema=5')) `
     'Firmware reports do not identify their RC and schema.'
 Assert-True ($bridge.Contains('source_library_match')) `
     'Same-firmware source/game libScePad comparison is missing.'

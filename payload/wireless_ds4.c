@@ -42,6 +42,7 @@
 extern void poords4_log(const char *format, ...);
 #define klog_printf poords4_log
 #define POORDS4_REMOTE_PAD_CAPACITY 256u
+#define POORDS4_GAME_BRIDGE_FW_0860 UINT32_C(0x08600004)
 #define POORDS4_GAME_BRIDGE_FW_1160 UINT32_C(0x11600005)
 #define POORDS4_GAME_BRIDGE_FW_1240 UINT32_C(0x12400009)
 #define POORDS4_KEKCALL_REMOTE_SYSCALL UINT64_C(0x500000027)
@@ -167,6 +168,7 @@ done:
 #define POORDS4_PAD_CLIENT_STRIDE_1160 UINT32_C(0x000005c8)
 #define POORDS4_PAD_CLIENT_CONNECTED_1160 UINT32_C(0x18)
 #define POORDS4_PAD_CLIENT_HANDLE_1160 UINT32_C(0x1c)
+#define POORDS4_PAD_CLIENT_USER_ID_1160 UINT32_C(0x24)
 #define POORDS4_PAD_CLIENT_VENDOR_1160 UINT32_C(0x60)
 #define POORDS4_PAD_CLIENT_PRODUCT_1160 UINT32_C(0x62)
 
@@ -1595,7 +1597,7 @@ wireless_ds4_remote_reader_start(
             report_printf(
                 source_report_fd,
                 "mode=read-only-source-libpad-fingerprint\n"
-                "poords4_rc=%d\nreport_schema=4\n"
+                "poords4_rc=%d\nreport_schema=5\n"
                 "firmware=0x%08x\npid=%d\nlibpad_base=0x%lx\n",
                 POORDS4_RC_VERSION, firmware, target,
                 (unsigned long)libpad_base);
@@ -2202,6 +2204,21 @@ wireless_ds4_remote_reader_stop(pid_t pid, intptr_t args_kaddr)
 #endif
 }
 
+#define POORDS4_READ_STATE_OFFSET_0860 UINT32_C(0x00002a10)
+#define POORDS4_READ_STATE_FNV256_0860 UINT64_C(0xb39fa7c1c539da3c)
+#define POORDS4_READ_OFFSET_0860 UINT32_C(0x00002a20)
+#define POORDS4_READ_FNV256_0860 UINT64_C(0x95b5fbbe29e8dc2d)
+#define POORDS4_READ_STATE_EXT_OFFSET_0860 UINT32_C(0x00002a30)
+#define POORDS4_READ_STATE_EXT_FNV256_0860 UINT64_C(0x7dee2be11cea28a3)
+#define POORDS4_READ_EXT_OFFSET_0860 UINT32_C(0x00002a40)
+#define POORDS4_READ_EXT_FNV256_0860 UINT64_C(0x33f8eeb15ecdd836)
+#define POORDS4_DATA_INTERNAL_OFFSET_0860 UINT32_C(0x00000e50)
+#define POORDS4_DATA_INTERNAL_FNV256_0860 \
+    UINT64_C(0x8bb51ee7c6a0b88f)
+#define POORDS4_CONTROLLER_INFO_OFFSET_0860 UINT32_C(0x00004780)
+#define POORDS4_CONTROLLER_INFO_FNV256_0860 \
+    UINT64_C(0x419d0c07a15038b0)
+
 #define POORDS4_READ_STATE_OFFSET_1160 UINT32_C(0x00002a80)
 #define POORDS4_READ_STATE_FNV256_1160 UINT64_C(0xa4fea18d88eb7cc9)
 #define POORDS4_READ_OFFSET_1160 UINT32_C(0x00002a90)
@@ -2235,6 +2252,7 @@ wireless_ds4_remote_reader_stop(pid_t pid, intptr_t args_kaddr)
 enum {
     POORDS4_MANIFEST_NONE = 0,
     POORDS4_MANIFEST_STRUCTURAL = 1,
+    POORDS4_MANIFEST_0860 = 860,
     POORDS4_MANIFEST_1160 = 1160,
     POORDS4_MANIFEST_1240 = 1240
 };
@@ -2929,11 +2947,12 @@ game_bridge_recover_stale_v1(
 static int
 game_bridge_select_pad_handle(
     pid_t target, intptr_t libpad_base, intptr_t read_state,
-    int32_t source_pad_index, int report_fd,
+    int32_t source_user_id, int32_t source_pad_index, int report_fd,
     int32_t *out_handle, int32_t *out_index)
 {
     if (target <= 0 || libpad_base <= 0 || read_state <= 0 ||
-        source_pad_index < 0 || source_pad_index >= 8 ||
+        source_user_id < 0 || source_pad_index < 0 ||
+        source_pad_index >= 8 ||
         !out_handle || !out_index)
         return -1;
 
@@ -2967,10 +2986,14 @@ game_bridge_select_pad_handle(
     int32_t unique_ds4_index = -1;
     int32_t unique_inactive_handle = -1;
     int32_t unique_inactive_index = -1;
+    int32_t identity_inactive_handle = -1;
+    int32_t identity_inactive_index = -1;
     unsigned active_count = 0;
     unsigned indexed_count = 0;
     unsigned indexed_ds4_count = 0;
     unsigned indexed_inactive_count = 0;
+    unsigned identity_count = 0;
+    unsigned identity_inactive_count = 0;
     unsigned ds4_count = 0;
     unsigned inactive_count = 0;
     report_printf(
@@ -2982,6 +3005,7 @@ game_bridge_select_pad_handle(
             POORDS4_PAD_CLIENT_STRIDE_1160;
         int32_t connected = 0;
         int32_t handle = 0;
+        int32_t user_id = -1;
         int32_t valid = 0;
         uint16_t vendor = 0;
         uint16_t product = 0;
@@ -2991,6 +3015,9 @@ game_bridge_select_pad_handle(
             game_bridge_process_read(
                 target, entry + POORDS4_PAD_CLIENT_HANDLE_1160,
                 &handle, sizeof(handle)) != 0 ||
+            game_bridge_process_read(
+                target, entry + POORDS4_PAD_CLIENT_USER_ID_1160,
+                &user_id, sizeof(user_id)) != 0 ||
             game_bridge_process_read(
                 target, entry + 0x38, &valid, sizeof(valid)) != 0 ||
             game_bridge_process_read(
@@ -3041,9 +3068,10 @@ game_bridge_select_pad_handle(
         report_printf(
             report_fd,
             "pad_client slot=%u entry=0x%lx handle=0x%08x "
-            "inferred_index=%d connected=%d valid=%d "
+            "user_id=0x%08x inferred_index=%d connected=%d valid=%d "
             "vid=0x%04x pid=0x%04x ds4=%d\n",
             slot, (unsigned long)entry, (uint32_t)handle,
+            (uint32_t)user_id,
             inferred_index, connected, valid, vendor, product, is_ds4);
 
         active_count++;
@@ -3066,6 +3094,15 @@ game_bridge_select_pad_handle(
             if (!connected && !valid)
                 indexed_inactive_count++;
         }
+        if (user_id == source_user_id &&
+            inferred_index == source_pad_index) {
+            identity_count++;
+            if (!connected && !valid) {
+                identity_inactive_count++;
+                identity_inactive_handle = handle;
+                identity_inactive_index = inferred_index;
+            }
+        }
     }
 
     const char *method = "none";
@@ -3073,19 +3110,24 @@ game_bridge_select_pad_handle(
      * logged-in users normally both expose source index zero. The game table
      * is global and orders its handles by player slot. Native PS5 titles keep
      * each unsupported DS4-facing slot allocated but disconnected, while
-     * real DualSense slots are connected. Select from global table state so
-     * either controller connection order works without taking over a native
-     * DualSense. Multiple candidates are deliberately ambiguous. */
+     * real DualSense slots are connected. The (user,index) pair identifies
+     * one controller even when a title preallocates several inactive slots;
+     * an index alone is not global and is never used as a fallback. */
     if (ds4_count == 1u) {
         *out_handle = unique_ds4_handle;
         *out_index = unique_ds4_index;
         method = "global-exact-ds4";
+    } else if (ds4_count == 0u && identity_count == 1u &&
+               identity_inactive_count == 1u) {
+        *out_handle = identity_inactive_handle;
+        *out_index = identity_inactive_index;
+        method = "source-user-index-inactive";
     } else if (ds4_count == 0u && inactive_count == 1u) {
         *out_handle = unique_inactive_handle;
         *out_index = unique_inactive_index;
         method = "global-inactive-unique";
     } else if (ds4_count == 0u && inactive_count == 0u &&
-               active_count == 1u) {
+               active_count == 1u && identity_count == 1u) {
         *out_handle = sole_handle;
         *out_index = sole_index;
         method = "sole-entry";
@@ -3094,11 +3136,13 @@ game_bridge_select_pad_handle(
         report_fd,
         "pad_selection=%s handle=0x%08x index=%d "
         "active=%u ds4=%u inactive=%u source_indexed=%u "
-        "source_indexed_ds4=%u source_indexed_inactive=%u\n",
+        "source_indexed_ds4=%u source_indexed_inactive=%u "
+        "source_identity=%u source_identity_inactive=%u\n",
         method, (uint32_t)*out_handle, *out_index,
         active_count, ds4_count, inactive_count, indexed_count,
         indexed_ds4_count,
-        indexed_inactive_count);
+        indexed_inactive_count, identity_count,
+        identity_inactive_count);
     return *out_handle >= 0 ? 0 : -1;
 }
 
@@ -3157,7 +3201,7 @@ wireless_ds4_game_bridge_run_passive(
         "firmware=0x%08x\npid=%d\nuser_id=0x%08x\n"
         "source_pad_index=%d\nsource_handle=0x%08x\n"
         "source_is_ds4=0x%08x\n"
-        "poords4_rc=%d\nreport_schema=4\n"
+        "poords4_rc=%d\nreport_schema=5\n"
         "install_mode=passive-target-anonymous\nptrace_calls=0\n"
         "remote_game_calls=0\ngame_heap_allocations=0\n",
         firmware, target, (uint32_t)source->user_id,
@@ -3210,6 +3254,22 @@ wireless_ds4_game_bridge_run_passive(
         POORDS4_DATA_INTERNAL_FNV256_1160,
         POORDS4_CONTROLLER_INFO_FNV256_1160
     };
+    const uint32_t offsets_0860[6] = {
+        POORDS4_READ_STATE_OFFSET_0860,
+        POORDS4_READ_STATE_EXT_OFFSET_0860,
+        POORDS4_READ_OFFSET_0860,
+        POORDS4_READ_EXT_OFFSET_0860,
+        POORDS4_DATA_INTERNAL_OFFSET_0860,
+        POORDS4_CONTROLLER_INFO_OFFSET_0860
+    };
+    const uint64_t hashes_0860[6] = {
+        POORDS4_READ_STATE_FNV256_0860,
+        POORDS4_READ_STATE_EXT_FNV256_0860,
+        POORDS4_READ_FNV256_0860,
+        POORDS4_READ_EXT_FNV256_0860,
+        POORDS4_DATA_INTERNAL_FNV256_0860,
+        POORDS4_CONTROLLER_INFO_FNV256_0860
+    };
     const uint32_t offsets_1240[6] = {
         POORDS4_READ_STATE_OFFSET_1240,
         POORDS4_READ_STATE_EXT_OFFSET_1240,
@@ -3227,9 +3287,11 @@ wireless_ds4_game_bridge_run_passive(
         POORDS4_CONTROLLER_INFO_FNV256_1240
     };
     const uint32_t *expected_offsets =
+        firmware == POORDS4_GAME_BRIDGE_FW_0860 ? offsets_0860 :
         firmware == POORDS4_GAME_BRIDGE_FW_1160 ? offsets_1160 :
         firmware == POORDS4_GAME_BRIDGE_FW_1240 ? offsets_1240 : NULL;
     const uint64_t *expected_hashes =
+        firmware == POORDS4_GAME_BRIDGE_FW_0860 ? hashes_0860 :
         firmware == POORDS4_GAME_BRIDGE_FW_1160 ? hashes_1160 :
         firmware == POORDS4_GAME_BRIDGE_FW_1240 ? hashes_1240 : NULL;
     int exact_manifest = expected_offsets && expected_hashes;
@@ -3335,8 +3397,10 @@ wireless_ds4_game_bridge_run_passive(
         "wrapper_shapes=%zu,%zu,%zu,%zu,%zu\n"
         "wrapper_targets=0x%lx,0x%lx,0x%lx,0x%lx,0x%lx\n",
         exact_manifest
-            ? (firmware == POORDS4_GAME_BRIDGE_FW_1160
-                ? "11.60-exact" : "12.40-exact")
+            ? (firmware == POORDS4_GAME_BRIDGE_FW_0860
+                ? "8.60-exact"
+                : firmware == POORDS4_GAME_BRIDGE_FW_1160
+                    ? "11.60-exact" : "12.40-exact")
             : "structural-runtime",
         structural_abi, jump_offsets[0], jump_offsets[1],
         jump_offsets[2], jump_offsets[3], jump_offsets[4],
@@ -3374,7 +3438,8 @@ wireless_ds4_game_bridge_run_passive(
     int32_t game_pad_handle = -1;
     int32_t game_pad_index = -1;
     if (game_bridge_select_pad_handle(
-            target, base, originals[0], source->pad_index,
+            target, base, originals[0], source->user_id,
+            source->pad_index,
             report_fd, &game_pad_handle, &game_pad_index) != 0) {
         report_printf(report_fd, "state=waiting_for_game_pad_handle\n");
         result = -4;
