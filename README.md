@@ -3,7 +3,9 @@
 > PoorDS4 would not have been possible without the excellent work behind
 > [Ghostcontrol](https://github.com/StonedModder/Ghostcontrol-PS5-USB-Controller-Patcher)
 > by StonedModder. Its controller research and PS5 payload foundation made this
-> project possible. PoorDS4 also relies on the
+> project possible, this project will eventually be merged to it later on if stoned Modder agrees even though its different now.
+> I'm only using this for testing and gathering logs from testers until its fully stable and make this implementation much cleaner
+> PoorDS4 also relies on the
 > [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) and the remote-syscall
 > interface documented by [kstuff-lite](https://github.com/EchoStretch/kstuff-lite).
 
