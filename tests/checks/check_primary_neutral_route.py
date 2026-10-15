@@ -88,6 +88,19 @@ static int invalid_context(void){
  }
  return 0;
 }
+static int live_client_indices(void){
+ for(unsigned primary=0;primary<4;primary++){
+  setup(primary);fixture.slots[0].reserved[2]=POORDS4_CLIENT_BINDING_MAGIC;
+  fixture.reserved0=8+primary;fixture.slots[primary].pad_index=(int32_t)fixture.reserved0;
+  fixture.pad_handle=fixture.slots[primary].pad_handle=0x03000708+(int32_t)primary;
+  GamePadBridgeSlot old[4];memcpy(old,fixture.slots,sizeof old);
+  ScePadData neutral;make_neutral_connected_pad(&neutral);
+  CHECK(wireless_ds4_game_bridge_update(94,(intptr_t)&fixture,&neutral,sizeof neutral)==0);
+  for(unsigned i=0;i<4;i++)if(i!=primary)CHECK(!memcmp(&old[i],&fixture.slots[i],sizeof old[i]));
+  CHECK(fixture.slots[primary].direct_packets==1);
+ }
+ return 0;
+}
 '''
 if opts.connection_continuity:
  program+=r'''
@@ -126,12 +139,12 @@ static int retained_generation(void){
  printf("retained connection metadata: %u cases, both buffers, every count including zero, all primary indices; held controls neutralized\n",cases);
  return 0;
 }
-int main(void){int failed=all_primary_indices()+invalid_context()+initialized_neutral()+retained_generation();
+int main(void){int failed=all_primary_indices()+invalid_context()+live_client_indices()+initialized_neutral()+retained_generation();
  printf("neutral continuity and context checks failed=%d\n",failed);return failed?1:0;}
 '''
 else:
  program+=r'''
-int main(void){int failed=all_primary_indices()+invalid_context();
+int main(void){int failed=all_primary_indices()+invalid_context()+live_client_indices();
  printf("actual neutral builder and producer: all four primary indices preserve other slots; invalid identity/native/simulated/context refuses without writes; failed=%d\n",failed);return failed?1:0;}
 '''
 cc=os.environ.get('POORDS4_HOST_CC','gcc')

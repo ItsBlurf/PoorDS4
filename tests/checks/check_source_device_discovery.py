@@ -33,11 +33,13 @@ static RemotePadReaderTransport *active;
 #define EXPECT(x) do{checks++;if(!(x)){fprintf(stderr,"mode=%d line=%d check=%s\n",mode,__LINE__,#x);return 1;}}while(0)
 static int32_t model_state(int32_t h,void *out){
  ScePadData *s=out;memset(s,0,sizeof *s);s->connected=1;s->timestamp=frames*8333;s->count=1;
+ if(mode>=19){s->buttons=1u<<((unsigned)h%8);s->leftStick.x=(uint8_t)(h*3+7);s->analogButtons.l2=(uint8_t)(h+30);s->count=(uint8_t)h;s->timestamp+=(unsigned)h;}
  if(h==44)primary_reads++;
  if(h==55 && (mode==8 || mode==15))s->connected=0;
  return 0;
 }
 static int32_t model_events(int32_t h,void *out,int32_t count){
+ if(mode==19){model_state(h,out);return count==1?1:-1;}
  if(h==55 && mode==15){model_state(h,out);((ScePadData*)out)->connected=1;return count==1?1:-1;}return 0;
 }
 static void model_sleep(unsigned us){(void)us;if(++frames>=1000)active->input.stop=1;}
@@ -85,7 +87,7 @@ static int exercise(int scenario){
  d->users[0]=11;d->users[1]=22;d->user_count=2;d->admitted_count=1;d->interval_frames=16;
  d->admitted_users[0]=11;d->admitted_indices[0]=0;
  if(mode==13)t.input.slot_handles[1]=55;
- if(mode==16 || mode==17){
+ if(mode==16 || mode==17 || mode>=19){
   d->admitted_count=4;
   for(unsigned s=1;s<4;s++){d->admitted_users[s]=(mode==17 && s==1)?22:30+(int)s;d->admitted_indices[s]=0;t.input.slot_handles[s]=46+(int)s;}
  }
@@ -104,6 +106,18 @@ static int exercise(int scenario){
  if(mode==0 || mode==11 || mode==13){EXPECT(closes==0);}
  if(mode==16){EXPECT(d->opened==0 && !d->refresh_requested);}
  if(mode==18){EXPECT(lookups==0 && open_calls==0);}
+ if(mode>=19){
+  EXPECT(d->opened==0 && !d->refresh_requested);
+  EXPECT(t.input.read_success_frames==(mode==19?1000u:0u));
+  for(unsigned slot=0;slot<4;slot++){
+   int handle=slot?46+(int)slot:44;
+   const ScePadData *pad=(const ScePadData *)(slot?t.input.slot_data[slot]:t.input.pad_data);
+   EXPECT(t.input.slot_results[slot]==0 && t.input.slot_seqs[slot]==2000);
+   EXPECT(pad->connected && pad->buttons==(1u<<((unsigned)handle%8)));
+   EXPECT(pad->leftStick.x==(uint8_t)(handle*3+7) && pad->analogButtons.l2==(uint8_t)(handle+30));
+   EXPECT(pad->count==(uint8_t)handle && pad->timestamp==999u*8333u+(unsigned)handle);
+  }
+ }
  if(mode==11){EXPECT(d->identity_queries==0);}
 #else
  /* A legacy reader can only request its existing reset/refresh path. Check
@@ -112,7 +126,7 @@ static int exercise(int scenario){
 #endif
  return 0;
 }
-int main(void){for(int s=0;s<19;s++)if(exercise(s))return 1;printf("checks=%u cases=19 healthy-primary=1\n",checks);return 0;}
+int main(void){for(int s=0;s<21;s++)if(exercise(s))return 1;printf("checks=%u cases=21 healthy-primary=1 four-distinct-reader-feeds=queued+state\n",checks);return 0;}
 '''
 program='#define HAVE_DISCOVERY '+str(int(has_discovery))+'\n'+program
 with tempfile.TemporaryDirectory(prefix='poords4-discovery-') as td:

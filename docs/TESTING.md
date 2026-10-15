@@ -14,6 +14,10 @@ Sony API and memory/transport models. It covers:
 - Connection metadata and source generations.
 - Import/NID matching, ordinary relocations and SDK symbol extents.
 - Controller attribution, high client indexes and source-user ordering.
+- Anchored table discovery before clients open, first information queries,
+  recreated handles, duplicate-user clients and native index reuse.
+- Four independent production reader feeds through queued and state acquisition,
+  and distinct per-player packets through all five game input callbacks.
 - Source rediscovery, handle ownership, snapshot interleavings and image recovery.
 - Trigger request/query guards and concurrent per-player cache publication.
 - Existing feedback routes and per-controller output isolation.

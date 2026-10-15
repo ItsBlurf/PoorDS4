@@ -2013,7 +2013,7 @@ main(void)
     }
 
     poords4_log_reset();
-    poords4_log("[PoorDS4] version=" POORDS4_VERSION " build=20261015r30-api-guards "
+    poords4_log("[PoorDS4] version=" POORDS4_VERSION " build=20261015r33-live-client-bindings "
                 "imports=plt+nonplt transport=source-reader ps4=native trigger-state=neutral-compat rumble=game-relay\n");
     (void)unlink(GAME_BRIDGE_STOP_FILE);
     (void)unlink(GAME_BRIDGE_RESET_FILE);

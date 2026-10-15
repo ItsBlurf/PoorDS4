@@ -3,9 +3,9 @@
 import re
 
 def function(text, name):
-    # A prototype can precede the definition. Do not accidentally extract the
-    # following helper's body when the first occurrence ends with a semicolon.
-    match = re.search(r'^\s*' + re.escape(name) + r'\([^;{}]*\)\s*\{', text, re.MULTILINE)
+    # Production definitions put the name at column zero. Exclude indented
+    # calls inside conditions as well as prototypes preceding the definition.
+    match = re.search(r'^' + re.escape(name) + r'\([^;{}]*\)\s*\{', text, re.MULTILINE)
     if not match:
         raise ValueError('missing function definition: ' + name)
     pos = match.start()

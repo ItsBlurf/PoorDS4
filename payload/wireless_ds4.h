@@ -265,6 +265,8 @@ typedef struct {
     uint64_t device_class_calls, device_class_errors, device_class_matched_calls;
     int32_t device_class_last_result, device_class_last_handle;
     int32_t device_class_last_slot, device_class_last_value;
+    uint32_t client_binding_available;
+    uint64_t client_bindings, client_native_rejects, client_missing;
 } PoorDS4GameBridgeStatus;
 
 int wireless_ds4_game_bridge_status(pid_t game_pid, intptr_t args_address,

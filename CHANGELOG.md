@@ -2,6 +2,13 @@
 
 ## v0.2.0 — Unreleased
 
+- Bind newly opened game clients to their independently observed DS4 user before
+  the game's first controller-information check, including multiplayer joins.
+- Preserve native controller identity when handles or player indexes change;
+  reject duplicate clients that would copy one physical feed to another player.
+- Locate the controller table from Sony's handle lookup and retain recovery
+  routing for higher client indexes.
+
 ### Fixed
 
 - Discover callable pad imports in ordinary relocation tables as well as PLT tables.

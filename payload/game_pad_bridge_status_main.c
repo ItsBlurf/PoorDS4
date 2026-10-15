@@ -340,6 +340,10 @@ main(void)
         (unsigned long long)bridge.device_class_errors,(unsigned long long)bridge.device_class_matched_calls,
         (uint32_t)bridge.device_class_last_result,(uint32_t)bridge.device_class_last_handle,
         bridge.device_class_last_slot,bridge.device_class_last_value);
+    fprintf(f,"client_binding_available=%u\nclient_bindings=%llu\n"
+        "client_native_rejects=%llu\nclient_missing=%llu\n",
+        bridge.client_binding_available, (unsigned long long)bridge.client_bindings,
+        (unsigned long long)bridge.client_native_rejects, (unsigned long long)bridge.client_missing);
     fprintf(f,"vibration_available=%u\nvibration_calls=%llu\nvibration_mode_calls=%llu\n"
         "vibration_publications=%llu\nvibration_native_calls=%llu\nvibration_failures=%llu\n"
         "vibration_last_caller=0x%08x\nvibration_native_result=0x%08x\nvibration_last_mode=%d\n",

@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = Path(os.environ.get("POORDS4_TEST_ROOT", ROOT)).resolve()
 CHECKS = Path(__file__).resolve().parent / "checks"
 PAYLOAD_CHECKS = (
-    "input_api_guards", "lego_empty_read", "reader_snapshot",
+    "input_api_guards", "client_table_locator", "lego_empty_read", "reader_snapshot",
     "reader_handle_cleanup", "source_device_discovery", "reader_route_recovery",
     "primary_neutral_route", "game_image_recovery", "device_class_observer",
     "device_class_import", "trigger_effect_import", "trigger_effect_controls",

@@ -43,6 +43,12 @@ A validated DS4 binding receives its real source packet. Known native DualSense
 bindings and unmatched handles use Sony's original path. A source binding does
 not grant another controller's data to an unrelated handle.
 
+Publication endpoints belong to independently observed DS4 users. During a
+game's controller-information or read call, the callback resolves the exact
+Sony handle against the live client table and its user identity. Native
+DualSense identity takes precedence over a cached index. Duplicate clients of
+one user do not receive additional copies of that user's physical feed.
+
 Queued reads report one new bridged sample per publication and zero when the
 publication repeats. An empty queued read retains the latest real packet in
 sample zero: consumers that examine connection state on an empty update must
@@ -60,6 +66,12 @@ source connection generation.
 library and controller ABI before redirecting its import slots. It handles
 both PLT and ordinary callable imports. The library's own text is unchanged.
 A bounded PS4 title classifier preserves native PS4 passthrough.
+
+The table locator recognizes the handle-lookup reference and its matching
+stride/span before considering heuristic candidates. A structurally anchored
+empty table permits installation before the first controller opens. This lets
+games query bridged connection information immediately after opening a DS4;
+client creation or handle-generation changes do not require removing imports.
 
 Copied code lives in `.text.ds4reader` and `.text.ds4gamebridge`. Keep these
 regions self-contained; their allocation, arguments and executable extents

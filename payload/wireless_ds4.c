@@ -939,6 +939,7 @@ _Static_assert(sizeof(GamePadBridgeArgs) == 5968,
 #define POORDS4_EFFECT_DIAG_MAGIC UINT32_C(0x31445854)
 #define POORDS4_DEVICE_CLASS_DIAG_MAGIC UINT32_C(0x31444350)
 #define POORDS4_EMPTY_READ_DIAG_MAGIC UINT32_C(0x31524550)
+#define POORDS4_CLIENT_BINDING_MAGIC UINT32_C(0x31424350)
 #include "trigger_effect_state.h"
 typedef struct {
     GamePadBridgeArgs input;
@@ -969,6 +970,13 @@ typedef struct {
     volatile uint64_t device_class_calls, device_class_errors, device_class_matched_calls;
     volatile int32_t device_class_last_result, device_class_last_handle;
     volatile int32_t device_class_last_slot, device_class_last_value;
+    /* Game-local lookup: fixed physical feed owners, live Sony client handles.
+     * The original 5968-byte input prefix and prior extensions stay intact. */
+    uint32_t client_binding_magic, client_stride;
+    intptr_t client_table;
+    int32_t client_users[POORDS4_MAX_SLOTS];
+    uint32_t client_primary_slot, client_reserved;
+    volatile uint64_t client_bindings, client_native_rejects, client_missing;
 } GamePadBridgeTriggerArgs;
 _Static_assert(offsetof(GamePadBridgeTriggerArgs,magic)==5968,
                "Trigger extension changed the original input prefix");
@@ -1013,6 +1021,69 @@ game_bridge_find_slot(GamePadBridgeArgs *args, int32_t handle)
 {
     if (!args || handle <= 0 || (handle & 0xffffff00) == 0)
         return -1;
+    if (args->slots[0].reserved[2] == POORDS4_CLIENT_BINDING_MAGIC) {
+        GamePadBridgeTriggerArgs *extension = (GamePadBridgeTriggerArgs *)args;
+        uint32_t stride = extension->client_stride;
+        if (extension->client_binding_magic != POORDS4_CLIENT_BINDING_MAGIC ||
+            extension->client_table <= 0 || (stride != 0x5c8u && stride != 0x548u))
+            return -1;
+        for (unsigned row = 0; row < 24u; ++row) {
+            const volatile uint8_t *entry = (const volatile uint8_t *)(uintptr_t)
+                (extension->client_table + (intptr_t)row * stride);
+            int32_t found = *(const volatile int32_t *)(entry + 0x1c);
+            if (found != handle) continue;
+            int32_t user = *(const volatile int32_t *)(entry + 0x24);
+            int32_t connected = *(const volatile int32_t *)(entry + 0x18);
+            uint32_t device = *(const volatile uint32_t *)(entry + 0x60);
+            if (*(const volatile int32_t *)(entry + 0x1c) != found ||
+                *(const volatile int32_t *)(entry + 0x24) != user)
+                return -1;
+            /* A DualSense can reuse an old DS4 index. Its native identity
+             * takes precedence over every cached handle-generation alias. */
+            int known_ds4 = device == UINT32_C(0x05c4054c) || device == UINT32_C(0x09cc054c) ||
+                device == UINT32_C(0x0ba0054c) || device == UINT32_C(0x0000054c);
+            if (device == UINT32_C(0x0ce6054c) || device == UINT32_C(0x0df2054c) ||
+                connected < 0 || connected > 1 || (connected && !known_ds4)) {
+                (void)__atomic_fetch_add(&extension->client_native_rejects, 1, __ATOMIC_RELAXED);
+                return -1;
+            }
+            int owner = -1;
+            for (unsigned slot = 0; slot < POORDS4_MAX_SLOTS; ++slot) {
+                if (user < 0 || extension->client_users[slot] != user) continue;
+                if (owner >= 0) return -1;
+                owner = (int)slot;
+            }
+            if (owner < 0) return -1;
+            /* A user may have duplicate game-local clients. Only its first
+             * eligible client represents the independently acquired feed. */
+            for (unsigned other = 0; other < 24u; ++other) {
+                const volatile uint8_t *candidate = (const volatile uint8_t *)(uintptr_t)
+                    (extension->client_table + (intptr_t)other * stride);
+                int32_t other_handle = *(const volatile int32_t *)(candidate + 0x1c);
+                if (other_handle <= 0 || (other_handle & 0xff) >= (handle & 0xff) ||
+                    *(const volatile int32_t *)(candidate + 0x24) != user) continue;
+                int32_t other_connected = *(const volatile int32_t *)(candidate + 0x18);
+                uint32_t other_device = *(const volatile uint32_t *)(candidate + 0x60);
+                int other_ds4 = other_device == UINT32_C(0x05c4054c) || other_device == UINT32_C(0x09cc054c) ||
+                    other_device == UINT32_C(0x0ba0054c) || other_device == UINT32_C(0x0000054c);
+                if (other_device != UINT32_C(0x0ce6054c) && other_device != UINT32_C(0x0df2054c) &&
+                    (other_connected == 0 || (other_connected == 1 && other_ds4)))
+                    return -1;
+            }
+            if (__atomic_load_n(&args->slots[owner].pad_handle, __ATOMIC_RELAXED) != handle) {
+                __atomic_store_n(&args->slots[owner].pad_index, handle & 0xff, __ATOMIC_RELAXED);
+                __atomic_store_n(&args->slots[owner].pad_handle, handle, __ATOMIC_RELEASE);
+                (void)__atomic_fetch_add(&extension->client_bindings, 1, __ATOMIC_RELAXED);
+            }
+            if ((unsigned)owner == extension->client_primary_slot) {
+                __atomic_store_n(&args->reserved0, (uint32_t)(handle & 0xff), __ATOMIC_RELAXED);
+                __atomic_store_n(&args->pad_handle, handle, __ATOMIC_RELEASE);
+            }
+            return owner;
+        }
+        (void)__atomic_fetch_add(&extension->client_missing, 1, __ATOMIC_RELAXED);
+        return -1;
+    }
     for (unsigned s = 0; s < POORDS4_MAX_SLOTS; ++s) {
         if (args->slots[s].pad_handle > 0 && args->slots[s].pad_handle == handle)
             return (int)s;
@@ -5632,6 +5703,49 @@ game_bridge_collect_reader_clients(const GameBridgeReaderClient *clients,
     game_bridge_map_reader_slots(users, eligible, (int32_t)primary);
 }
 
+/* Reserve one publication endpoint per independently observed physical user.
+ * Sony may not have opened that user's game client yet. Its real handle is
+ * bound synchronously by game_bridge_find_slot when the client appears. */
+static int
+game_bridge_prepare_client_bindings(int32_t source_user, int32_t *handle,
+    int32_t *index, int32_t *handles, uint32_t *native, uint32_t *matches,
+    int32_t *users)
+{
+    if (source_user < 0 || !handle || !index || !handles || !native || !matches || !users)
+        return -1;
+    int previous[POORDS4_MAX_SLOTS];
+    for (unsigned slot = 0; slot < POORDS4_MAX_SLOTS; ++slot) {
+        previous[slot] = g_game_reader_slots[slot];
+        g_game_reader_slots[slot] = -1;
+        users[slot] = -1;
+    }
+    int primary = *handle > 0 ? (*index >= 0 && *index < (int32_t)POORDS4_MAX_SLOTS ? *index : 0) : -1;
+    for (unsigned slot = 0; primary < 0 && slot < POORDS4_MAX_SLOTS; ++slot)
+        if (handles[slot] <= 0) primary = (int)slot;
+    if (primary < 0) return -1;
+    if (*handle <= 0) *index = primary;
+    users[primary] = source_user;
+    native[primary] = 0;
+    matches[primary] = 1;
+    for (unsigned reader = 1; reader < POORDS4_MAX_SLOTS; ++reader) {
+        int32_t user = g_reader_users[reader];
+        unsigned owners = 0;
+        for (unsigned r = 0; r < POORDS4_MAX_SLOTS; ++r)
+            owners += user >= 0 && g_reader_users[r] == user;
+        if (user < 0 || user == source_user || owners != 1) continue;
+        int target = -1;
+        for (unsigned slot = 0; slot < POORDS4_MAX_SLOTS; ++slot)
+            if (slot != (unsigned)primary && previous[slot] == (int)reader && !native[slot])
+                target = (int)slot;
+        for (unsigned slot = 0; target < 0 && slot < POORDS4_MAX_SLOTS; ++slot)
+            if (users[slot] < 0 && !native[slot]) target = (int)slot;
+        if (target < 0) continue;
+        users[target] = user;
+        g_game_reader_slots[target] = (int)reader;
+    }
+    return primary;
+}
+
 static int
 game_bridge_select_pad_handle(
     pid_t target, intptr_t libpad_base, intptr_t read_state,
@@ -6402,15 +6516,33 @@ wireless_ds4_game_bridge_run_passive(
     int32_t slot_handles[POORDS4_MAX_SLOTS] = {-1, -1, -1, -1};
     uint32_t slot_dualsense[POORDS4_MAX_SLOTS] = {0, 0, 0, 0};
     uint32_t slot_user_matches[POORDS4_MAX_SLOTS] = {0, 0, 0, 0};
-    if (game_bridge_select_pad_handle(
+    int selection = game_bridge_select_pad_handle(
             target, base, originals[0], source->user_id,
             source->pad_index,
             report_fd, &game_pad_handle, &game_pad_index,
-            slot_handles, slot_dualsense, slot_user_matches) != 0) {
-        report_printf(report_fd, "state=waiting_for_game_pad_handle\n");
+            slot_handles, slot_dualsense, slot_user_matches);
+    GameBridgeDynlibObjectPrefix client_object = {0};
+    intptr_t client_table = 0;
+    uint32_t client_stride = 0;
+    if (game_cache_find_libpad_object(target, base, &client_object) ||
+        game_cache_find_table(target, base, client_object.mapsize, originals[0],
+            source->user_id, source->pad_index, report_fd, &client_table, &client_stride)) {
+        report_printf(report_fd, "state=waiting_for_game_client_table\n");
         result = -4;
         goto done;
     }
+    int32_t client_users[POORDS4_MAX_SLOTS];
+    int primary_endpoint = game_bridge_prepare_client_bindings(source->user_id,
+        &game_pad_handle, &game_pad_index, slot_handles, slot_dualsense,
+        slot_user_matches, client_users);
+    if (primary_endpoint < 0) {
+        report_printf(report_fd, "state=waiting_for_game_endpoint\n");
+        result = -4;
+        goto done;
+    }
+    report_printf(report_fd,
+        "client_binding_mode=live-user-table selection=%d primary_endpoint=%d deferred=%d\n",
+        selection, primary_endpoint, game_pad_handle <= 0);
 
     memset(hooks, 0, sizeof(hooks));
     int stale_result = game_bridge_recover_stale_v1(
@@ -6599,6 +6731,13 @@ wireless_ds4_game_bridge_run_passive(
         .effect_diag_magic=POORDS4_EFFECT_DIAG_MAGIC,
         .fp_device_class_info=originals[11],
         .device_class_diag_magic=POORDS4_DEVICE_CLASS_DIAG_MAGIC};
+    trigger_args.client_binding_magic = POORDS4_CLIENT_BINDING_MAGIC;
+    trigger_args.input.slots[0].reserved[2] = POORDS4_CLIENT_BINDING_MAGIC;
+    trigger_args.client_table = client_table;
+    trigger_args.client_stride = client_stride;
+    trigger_args.client_primary_slot = (uint32_t)primary_endpoint;
+    for (unsigned slot = 0; slot < POORDS4_MAX_SLOTS; ++slot)
+        trigger_args.client_users[slot] = client_users[slot];
     PoorDS4GameOutput *game_output=&trigger_args.rumble;
     game_output->magic=POORDS4_GAME_OUTPUT_MAGIC;game_output->version=1;
     game_output->size=sizeof *game_output;game_output->slots=4;
@@ -6994,10 +7133,18 @@ wireless_ds4_game_bridge_update(pid_t game_pid, intptr_t args_kaddr,
     if (game_bridge_copy_args(game_pid, args_kaddr, &args) != 0 ||
         args.magic != POORDS4_GAME_BRIDGE_MAGIC ||
         args.reserved1 != POORDS4_GAME_BRIDGE_LAYOUT_V1 ||
-        args.pad_size != POORDS4_GAME_BRIDGE_PAD_SIZE ||
-        args.reserved0 >= POORDS4_MAX_SLOTS)
+        args.pad_size != POORDS4_GAME_BRIDGE_PAD_SIZE)
         return -1;
     unsigned primary = args.reserved0;
+    if (args.slots[0].reserved[2] == POORDS4_CLIENT_BINDING_MAGIC) {
+        primary = POORDS4_MAX_SLOTS;
+        for (unsigned slot = 0; slot < POORDS4_MAX_SLOTS; ++slot)
+            if (args.pad_handle > 0 && args.slots[slot].pad_handle == args.pad_handle) {
+                if (primary != POORDS4_MAX_SLOTS) return -1;
+                primary = slot;
+            }
+    }
+    if (primary >= POORDS4_MAX_SLOTS) return -1;
     if (args.pad_handle <= 0 || args.slots[primary].pad_handle != args.pad_handle ||
         args.slots[primary].is_dualsense || args.slots[primary].is_simulated)
         return -1;
@@ -7080,6 +7227,20 @@ wireless_ds4_game_bridge_status(pid_t game_pid, intptr_t args_kaddr,
     uint64_t mapping_start=(uint64_t)args.remote_block;
     uint64_t mapping_end=mapping_start+args.remote_block_size;
     uint64_t argument=(uint64_t)args_kaddr;
+    if (args.slots[0].reserved[2] == POORDS4_CLIENT_BINDING_MAGIC &&
+        mapping_end >= mapping_start && argument >= mapping_start &&
+        argument <= mapping_end && sizeof(GamePadBridgeTriggerArgs) <= mapping_end-argument) {
+        GamePadBridgeTriggerArgs extension;
+        const size_t offset = offsetof(GamePadBridgeTriggerArgs, client_binding_magic);
+        if (!remote_reader_copyout(game_pid, args_kaddr+(intptr_t)offset,
+                (uint8_t *)&extension+offset, sizeof(extension)-offset) &&
+            extension.client_binding_magic == POORDS4_CLIENT_BINDING_MAGIC) {
+            out_status->client_binding_available = 1;
+            out_status->client_bindings = extension.client_bindings;
+            out_status->client_native_rejects = extension.client_native_rejects;
+            out_status->client_missing = extension.client_missing;
+        }
+    }
     if(has_trigger_import && mapping_end>=mapping_start && argument>=mapping_start &&
        argument<=mapping_end && sizeof(GamePadBridgeTriggerArgs)<=mapping_end-argument) {
         GamePadBridgeTriggerArgs extension;
@@ -7201,7 +7362,15 @@ wireless_ds4_game_bridge_status(pid_t game_pid, intptr_t args_kaddr,
     out_status->import_hook_count = args.import_hook_count;
     /* The supervisor publishes by bridge slot, not the Sony client index.
      * Higher client indexes can occupy slot zero in the existing initializer. */
-    out_status->game_pad_index = game_bridge_find_slot(&args, args.pad_handle);
+    /* This is a supervisor-local snapshot: never dereference its remote table
+     * pointer through a copied game callback helper. */
+    out_status->game_pad_index = -1;
+    for (unsigned slot = 0; slot < POORDS4_MAX_SLOTS; ++slot)
+        if ((args.pad_handle > 0 && args.slots[slot].pad_handle == args.pad_handle) ||
+            (args.slots[slot].reserved[0] && !args.slots[slot].is_dualsense)) {
+            out_status->game_pad_index = (int32_t)slot;
+            break;
+        }
     out_status->buttons = pad.buttons;
     out_status->connected = pad.connected;
     out_status->reset_combo_ticks = args.reset_combo_ticks;
@@ -7632,7 +7801,7 @@ game_cache_validate_table_candidate(
         if (handle <= 0)
             continue;
         int32_t index = handle & 0xff;
-        if (index < 0 || index >= 8 || user_id < 0 ||
+        if (index < 0 || index >= 24 || user_id < 0 ||
             (connected != 0 && connected != 1) ||
             (valid != 0 && valid != 1))
             return 0;
@@ -7645,7 +7814,8 @@ game_cache_validate_table_candidate(
     if (out_entries) *out_entries = entries;
     if (out_identity) *out_identity = identity;
     (void)user_matches;
-    return entries > 0u && entries <= 8u;
+    /* Two denotes a fully readable empty table, usable only with a code anchor. */
+    return entries == 0u ? 2 : entries <= 24u;
 #endif
 }
 
@@ -7721,6 +7891,55 @@ game_cache_report_user_hits(
     (void)target; (void)base; (void)mapsize;
     (void)source_user_id; (void)report_fd;
 #endif
+}
+
+/* Bind a table reference to Sony's actual handle lookup, not merely nearby
+ * data that happens to contain a positive integer. The same lookup advances
+ * by a client stride until its 24-entry span. */
+static int
+game_cache_table_reference_stride(const uint8_t *code, size_t size, size_t at)
+{
+    if (!code || at + 7u > size || code[at] < 0x40 || code[at] > 0x4f ||
+        code[at + 1u] != 0x8d || (code[at + 2u] & 0xc7u) != 0x05u)
+        return 0;
+    unsigned table_reg = ((code[at + 2u] >> 3) & 7u) |
+        ((code[at] & 4u) ? 8u : 0u);
+    size_t lookup_end = at + 39u < size ? at + 39u : size;
+    int handle_lookup = 0;
+    for (size_t p = at + 7u; p + 4u <= lookup_end; ++p) {
+        size_t op = p;
+        uint8_t rex = 0;
+        if (code[op] >= 0x40 && code[op] <= 0x4f) rex = code[op++];
+        if (op + 4u > lookup_end || code[op] != 0x8b ||
+            (code[op + 1u] & 0xc7u) != 0x44u ||
+            code[op + 3u] != POORDS4_PAD_CLIENT_HANDLE_1160)
+            continue;
+        unsigned sib = code[op + 2u];
+        unsigned base = (sib & 7u) | ((rex & 1u) ? 8u : 0u);
+        unsigned index = ((sib >> 3) & 7u) | ((rex & 2u) ? 8u : 0u);
+        if (base == table_reg ||
+            ((sib >> 6) == 0u && index != 4u && index == table_reg)) {
+            handle_lookup = 1;
+            break;
+        }
+    }
+    if (!handle_lookup) return 0;
+    const uint32_t strides[] = {POORDS4_PAD_CLIENT_STRIDE_1160,
+                                POORDS4_PAD_CLIENT_STRIDE_0602};
+    const uint32_t spans[] = {POORDS4_PAD_CLIENT_SPAN_1160,
+                              POORDS4_PAD_CLIENT_SPAN_0602};
+    size_t end = at + 96u < size ? at + 96u : size;
+    for (unsigned profile = 0; profile < 2; ++profile) {
+        int stride_seen = 0, span_seen = 0;
+        for (size_t p = at + 7u; p + 4u <= end; ++p) {
+            uint32_t immediate;
+            memcpy(&immediate, code + p, sizeof(immediate));
+            stride_seen |= immediate == strides[profile];
+            span_seen |= immediate == spans[profile];
+        }
+        if (stride_seen && span_seen) return (int)strides[profile];
+    }
+    return 0;
 }
 
 static int
@@ -7806,6 +8025,42 @@ game_cache_find_table(
     uint32_t match_strides[16];
     unsigned match_count = 0;
     unsigned ref_count = 0;
+    unsigned anchored_refs = 0;
+    for (size_t offset = 0; offset + 7u <= code_size; ++offset) {
+        int stride = game_cache_table_reference_stride(code, code_size, offset);
+        if (!stride) continue;
+        anchored_refs++;
+        int32_t displacement;
+        memcpy(&displacement, code + offset + 3u, sizeof(displacement));
+        intptr_t table = internal + (intptr_t)offset + 7 + displacement;
+        unsigned entries = 0, identity = 0;
+        int valid = game_cache_validate_table_candidate(target, base, mapsize,
+            table, (uint32_t)stride, source_user_id, source_pad_index,
+            &entries, &identity);
+        report_printf(report_fd,
+            "client_locator_anchor address=0x%lx stride=0x%x entries=%u identity=%u valid=%d\n",
+            (unsigned long)table, (unsigned)stride, entries, identity, valid);
+        if (!valid) continue;
+        int duplicate = 0;
+        for (unsigned prior = 0; prior < match_count; ++prior)
+            duplicate |= matches[prior] == table && match_strides[prior] == (uint32_t)stride;
+        if (!duplicate && match_count < 16u) {
+            matches[match_count] = table;
+            match_strides[match_count++] = (uint32_t)stride;
+        }
+    }
+    if (anchored_refs) {
+        /* A proven empty table can be watched from the game's information
+         * callback before its first controller is accepted. */
+        if (match_count != 1u) {
+            report_printf(report_fd, "client_locator_wait anchored=%u matches=%u\n",
+                          anchored_refs, match_count);
+            return -1;
+        }
+        *out_table = matches[0];
+        if (out_stride) *out_stride = match_strides[0];
+        return 0;
+    }
     for (size_t offset = 0; offset + 7u <= code_size; ++offset) {
         uint8_t rex = code[offset];
         uint8_t opcode = code[offset + 1u];
@@ -7872,7 +8127,7 @@ game_cache_find_table(
                             adjustments[adjustment_index], entries,
                             identity, valid);
                     }
-                    if (!valid)
+                    if (valid != 1)
                         continue;
                     int duplicate = 0;
                     for (unsigned prior = 0; prior < match_count; ++prior) {
