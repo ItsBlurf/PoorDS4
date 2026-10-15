@@ -19,6 +19,8 @@ Sony API and memory/transport models. It covers:
 - Four independent production reader feeds through queued and state acquisition,
   and distinct per-player packets through all five game input callbacks.
 - Source rediscovery, handle ownership, snapshot interleavings and image recovery.
+- Delayed metadata after a successful open, bounded probe lifetime, pending-probe
+  shutdown and close-failure handling, plus bounded V1/V2 discovery status reads.
 - Trigger request/query guards and concurrent per-player cache publication.
 - Existing feedback routes and per-controller output isolation.
 

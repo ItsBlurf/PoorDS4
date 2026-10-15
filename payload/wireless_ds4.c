@@ -753,6 +753,7 @@ remote_pad_reader_stub(void *arg)
         }
     }
     reader_rumble_service(transport,1);
+    poords4_source_discovery_release(&transport->discovery, a);
     if (close_pad) {
         if (a->close_pad_on_exit && a->pad_handle >= 0)
             (void)close_pad(a->pad_handle);
@@ -3769,6 +3770,7 @@ output_setup_done:
     transport.discovery.pending_user = -1;
     transport.discovery.pending_index = -1;
     transport.discovery.pending_device = -1;
+    transport.discovery.probe_handle = -1;
     for (unsigned u = 0; u < user_count; ++u)
         transport.discovery.users[u] = user_ids[u];
     for (unsigned s = 0; s < ds4_count; ++s) {
@@ -4087,16 +4089,19 @@ wireless_ds4_remote_reader_status(
     if (remote_reader_copyout(pid, discovery_address, &discovery_magic,
                              sizeof discovery_magic) != 0)
         return -1;
-    if (discovery_magic == POORDS4_DISCOVERY_MAGIC) {
-        PoorDS4SourceDiscovery discovery;
+    if (discovery_magic == POORDS4_DISCOVERY_MAGIC ||
+        discovery_magic == POORDS4_DISCOVERY_MAGIC_V1) {
+        PoorDS4SourceDiscovery discovery = {0};
+        size_t discovery_size = discovery_magic == POORDS4_DISCOVERY_MAGIC_V1 ?
+            offsetof(PoorDS4SourceDiscovery, probe_handle) : sizeof discovery;
         uint32_t refresh_before = 0;
         if (remote_reader_copyout(pid, discovery_address +
                 (intptr_t)offsetof(PoorDS4SourceDiscovery, refresh_requested),
                 &refresh_before, sizeof refresh_before) != 0 ||
             remote_reader_copyout(pid, discovery_address, &discovery,
-                                 sizeof discovery) != 0)
+                                 discovery_size) != 0)
             return -1;
-        if (discovery.magic == POORDS4_DISCOVERY_MAGIC) {
+        if (discovery.magic == discovery_magic) {
             out_status->discovery_available = 1;
             out_status->discovery_queries = discovery.queries;
             out_status->discovery_open_calls = discovery.open_calls;
@@ -4110,6 +4115,15 @@ wireless_ds4_remote_reader_status(
             out_status->discovery_index = discovery.refresh_index;
             out_status->discovery_last_lookup_result = discovery.last_lookup_result;
             out_status->discovery_last_open_result = discovery.last_open_result;
+            if (discovery_magic == POORDS4_DISCOVERY_MAGIC) {
+                out_status->discovery_probe_held = discovery.probe_held;
+                out_status->discovery_probe_polls = discovery.probe_polls;
+                out_status->discovery_probe_waits = discovery.probe_waits;
+                out_status->discovery_probe_timeouts = discovery.probe_timeouts;
+                out_status->discovery_last_device_result = discovery.last_device_result;
+                out_status->discovery_last_info_result = discovery.last_info_result;
+                out_status->discovery_last_state_result = discovery.last_state_result;
+            }
         }
     }
     return 0;
@@ -4175,9 +4189,16 @@ wireless_ds4_remote_reader_stop(pid_t pid, intptr_t args_kaddr)
                 g_reader_rumble_args=0;memset(g_reader_rumble_sent,0,sizeof g_reader_rumble_sent);
             }
             PoorDS4RemoteReaderStatus discovery_status;
-            if (wireless_ds4_remote_reader_status(pid, args_kaddr,
-                                                  &discovery_status) != 0 ||
-                discovery_status.discovery_close_errors) {
+            int discovery_result = wireless_ds4_remote_reader_status(
+                pid, args_kaddr, &discovery_status);
+            if (discovery_result == 0 && discovery_status.discovery_available)
+                klog_printf("[PoorDS4] reader discovery final opened=%u closed=%u held=%u waits=%u timeouts=%u close_errors=%u\n",
+                    discovery_status.discovery_opened, discovery_status.discovery_closed,
+                    discovery_status.discovery_probe_held, discovery_status.discovery_probe_waits,
+                    discovery_status.discovery_probe_timeouts, discovery_status.discovery_close_errors);
+            if (discovery_result != 0 ||
+                discovery_status.discovery_close_errors ||
+                discovery_status.discovery_probe_held) {
                 klog_printf("[PoorDS4] reader stopped with discovery close uncertainty; refusing replacement\n");
                 return -1;
             }

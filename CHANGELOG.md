@@ -18,6 +18,9 @@
 - Keep input and controller metadata on the same connection generation.
 - Validate source snapshots across non-atomic transport copies.
 - Observe new DS4 devices for already signed-in users and clean up owned handles correctly.
+- Allow newly opened discovery handles to acquire device metadata across bounded
+  reader iterations; release pending probes on shutdown and reject uncertain cleanup.
+- Preserve installed game controller identities while refreshing the source reader.
 - Cache compatible trigger requests using live queued input rather than an unused receiver flag.
 - Retain the real DS4 packet on empty queued reads, preventing false device-loss updates in LEGO Party and similar consumers.
 - Preserve native read-argument errors and route recovery-shortcut counters by validated logical controller slot.

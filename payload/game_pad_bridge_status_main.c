@@ -191,6 +191,14 @@ main(void)
         reader.discovery_disabled, reader.discovery_refresh_requested,
         (uint32_t)reader.discovery_last_lookup_result,
         (uint32_t)reader.discovery_last_open_result);
+    fprintf(f, "reader_discovery_probe_held=%u\nreader_discovery_probe_polls=%u\n"
+        "reader_discovery_probe_waits=%u\nreader_discovery_probe_timeouts=%u\n"
+        "reader_discovery_last_device_result=0x%08x\nreader_discovery_last_info_result=0x%08x\n"
+        "reader_discovery_last_state_result=0x%08x\n",
+        reader.discovery_probe_held, reader.discovery_probe_polls,
+        reader.discovery_probe_waits, reader.discovery_probe_timeouts,
+        (uint32_t)reader.discovery_last_device_result, (uint32_t)reader.discovery_last_info_result,
+        (uint32_t)reader.discovery_last_state_result);
 
     fprintf(f,
         "mode=read-only-game-bridge-status\n"

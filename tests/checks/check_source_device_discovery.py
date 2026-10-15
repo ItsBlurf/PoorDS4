@@ -28,26 +28,33 @@ program=r'''
 '''+types+r'''
 #include "reader_rumble_channel.h"
 static unsigned frames,lookups,open_calls,closes,primary_reads,bad,checks;
+static unsigned probe_open_frame,probe_live,probe_longest;
 static int mode;
 static RemotePadReaderTransport *active;
 #define EXPECT(x) do{checks++;if(!(x)){fprintf(stderr,"mode=%d line=%d check=%s\n",mode,__LINE__,#x);return 1;}}while(0)
 static int32_t model_state(int32_t h,void *out){
  ScePadData *s=out;memset(s,0,sizeof *s);s->connected=1;s->timestamp=frames*8333;s->count=1;
- if(mode>=19){s->buttons=1u<<((unsigned)h%8);s->leftStick.x=(uint8_t)(h*3+7);s->analogButtons.l2=(uint8_t)(h+30);s->count=(uint8_t)h;s->timestamp+=(unsigned)h;}
+ if(mode==19 || mode==20){s->buttons=1u<<((unsigned)h%8);s->leftStick.x=(uint8_t)(h*3+7);s->analogButtons.l2=(uint8_t)(h+30);s->count=(uint8_t)h;s->timestamp+=(unsigned)h;}
  if(h==44)primary_reads++;
  if(h==55 && (mode==8 || mode==15))s->connected=0;
+ if(h==55 && mode>=21)s->connected=probe_live && mode!=22 && frames-probe_open_frame>=16;
  return 0;
 }
 static int32_t model_events(int32_t h,void *out,int32_t count){
  if(mode==19){model_state(h,out);return count==1?1:-1;}
  if(h==55 && mode==15){model_state(h,out);((ScePadData*)out)->connected=1;return count==1?1:-1;}return 0;
 }
-static void model_sleep(unsigned us){(void)us;if(++frames>=1000)active->input.stop=1;}
-static int32_t model_close(int32_t h){if(h==44)bad++;else if(h!=55)bad++;closes++;return mode==12?-1:0;}
+static void model_sleep(unsigned us){(void)us;if(++frames>=((mode==23 || mode==24)?200u:1000u))active->input.stop=1;}
+static int32_t model_close(int32_t h){
+ if(h==44)bad++;else if(h!=55)bad++;closes++;
+ if(mode>=21){if(!probe_live)bad++;probe_live=0;unsigned age=frames-probe_open_frame;if(age>probe_longest)probe_longest=age;}
+ return mode==12 || mode==24?-1:0;
+}
 static int32_t model_lookup(uintptr_t u,uintptr_t type,uintptr_t i,uintptr_t z,uintptr_t z2,uintptr_t z3){
  lookups++;if(type||z||z2||z3)bad++;
  if(u==11 && i==0)return 44;
  if(u!=22 || i!=0 || frames<20)return -1;
+ if(mode>=21)return probe_live?55:-1;
  if(mode==1 || mode==11 || mode==12 || mode==14)return -1;
  if(mode==2)return -1;
  if(mode==9 && frames>=190)return -1;
@@ -56,12 +63,14 @@ static int32_t model_lookup(uintptr_t u,uintptr_t type,uintptr_t i,uintptr_t z,u
 static int32_t model_open(uintptr_t u,uintptr_t type,uintptr_t i,uintptr_t z,uintptr_t z2,uintptr_t z3){
  open_calls++;if(type||z||z2||z3)bad++;
  if(u!=22 || i!=0 || frames<20)return -1;
+ if(mode>=21){if(probe_live)bad++;probe_live=1;probe_open_frame=frames;return 55;}
  if(mode==11)return 44;
  return (mode==1 || mode==12 || mode==14)?55:-1;
 }
 static int32_t model_id(uintptr_t h,uintptr_t out,uintptr_t z,uintptr_t z2,uintptr_t z3,uintptr_t z4){
  if(h!=55 || z||z2||z3||z4)bad++;
  if(mode==6)return -1;
+ if(mode>=21 && (!probe_live || frames-probe_open_frame<(mode==25?48u:16u))){*(int32_t*)out=-1;return 0;}
  *(int32_t*)out=mode==10?(int)(frames/16):900;return 0;
 }
 static int32_t model_info(uintptr_t id,uintptr_t out,uintptr_t z,uintptr_t z2,uintptr_t z3,uintptr_t z4){
@@ -74,6 +83,7 @@ static int32_t model_info(uintptr_t id,uintptr_t out,uintptr_t z,uintptr_t z2,ui
 void *'''+function(source,'remote_pad_reader_stub')+r'''
 static int exercise(int scenario){
  mode=scenario;frames=lookups=open_calls=closes=primary_reads=bad=0;
+ probe_open_frame=probe_live=probe_longest=0;
  RemotePadReaderTransport t={0};active=&t;t.socket_fd=-1;
  t.input.pad_handle=44;t.input.slot_handles[0]=44;
  for(unsigned s=1;s<4;s++)t.input.slot_handles[s]=-1;
@@ -87,26 +97,26 @@ static int exercise(int scenario){
  d->users[0]=11;d->users[1]=22;d->user_count=2;d->admitted_count=1;d->interval_frames=16;
  d->admitted_users[0]=11;d->admitted_indices[0]=0;
  if(mode==13)t.input.slot_handles[1]=55;
- if(mode==16 || mode==17 || mode>=19){
+ if(mode==16 || mode==17 || mode==19 || mode==20){
   d->admitted_count=4;
   for(unsigned s=1;s<4;s++){d->admitted_users[s]=(mode==17 && s==1)?22:30+(int)s;d->admitted_indices[s]=0;t.input.slot_handles[s]=46+(int)s;}
  }
  if(mode==18)d->fp_getdeviceid=0;
 #endif
  remote_pad_reader_stub(&t);
- EXPECT(t.input.ready==2 && primary_reads==1000 && t.input.read_error_frames==0 && !bad);
- int expect_refresh=mode==0 || mode==1 || mode==15 || mode==17;
+ EXPECT(t.input.ready==2 && primary_reads==((mode==23 || mode==24)?200u:1000u) && t.input.read_error_frames==0 && !bad);
+ int expect_refresh=mode==0 || mode==1 || mode==15 || mode==17 || mode==21 || mode==25;
 #if HAVE_DISCOVERY
  EXPECT((int)d->refresh_requested==expect_refresh);
  if(expect_refresh){EXPECT(d->refresh_user==22 && d->refresh_index==0);EXPECT(d->queries<lookups+1);}
  EXPECT(lookups<=1000/16 && open_calls<=lookups);
- if(mode==1){EXPECT(d->opened==2 && d->closed==2 && closes==2);}
+ if(mode==1){EXPECT(d->opened>=1 && d->opened==d->closed && d->closed==closes);}
  if(mode==12){EXPECT(d->disabled && d->close_errors==1 && closes==1 && d->opened==1);}
  if(mode==14){EXPECT(d->opened==d->closed && d->opened>0 && !d->refresh_requested);}
  if(mode==0 || mode==11 || mode==13){EXPECT(closes==0);}
  if(mode==16){EXPECT(d->opened==0 && !d->refresh_requested);}
  if(mode==18){EXPECT(lookups==0 && open_calls==0);}
- if(mode>=19){
+ if(mode==19 || mode==20){
   EXPECT(d->opened==0 && !d->refresh_requested);
   EXPECT(t.input.read_success_frames==(mode==19?1000u:0u));
   for(unsigned slot=0;slot<4;slot++){
@@ -119,6 +129,13 @@ static int exercise(int scenario){
   }
  }
  if(mode==11){EXPECT(d->identity_queries==0);}
+ if(mode>=21){
+  EXPECT(!probe_live && probe_longest>=16 && probe_longest<=64);
+  if(mode!=24)EXPECT(d->opened==d->closed && d->closed==closes);
+  if(mode==21 || mode==25)EXPECT(d->opened==1 && closes==1);
+  if(mode==23)EXPECT(d->opened==1 && closes==1 && !d->refresh_requested);
+  if(mode==24)EXPECT(d->opened==1 && closes==1 && d->close_errors==1 && d->disabled);
+ }
 #else
  /* A legacy reader can only request its existing reset/refresh path. Check
   * that actual observable output, rather than asserting the test expectation. */
@@ -126,7 +143,7 @@ static int exercise(int scenario){
 #endif
  return 0;
 }
-int main(void){for(int s=0;s<21;s++)if(exercise(s))return 1;printf("checks=%u cases=21 healthy-primary=1 four-distinct-reader-feeds=queued+state\n",checks);return 0;}
+int main(void){for(int s=0;s<26;s++)if(exercise(s))return 1;printf("checks=%u cases=26 healthy-primary=1 four-distinct-reader-feeds=queued+state delayed-identity=16+48 timeout=64 pending-stop+close-failure=1\n",checks);return 0;}
 '''
 program='#define HAVE_DISCOVERY '+str(int(has_discovery))+'\n'+program
 with tempfile.TemporaryDirectory(prefix='poords4-discovery-') as td:

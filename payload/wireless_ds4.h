@@ -109,6 +109,9 @@ typedef struct {
     uint32_t discovery_disabled, discovery_refresh_requested;
     int32_t discovery_user, discovery_index;
     int32_t discovery_last_lookup_result, discovery_last_open_result;
+    uint32_t discovery_probe_held, discovery_probe_polls;
+    uint32_t discovery_probe_waits, discovery_probe_timeouts;
+    int32_t discovery_last_device_result, discovery_last_info_result, discovery_last_state_result;
 } PoorDS4RemoteReaderStatus;
 
 int wireless_ds4_remote_reader_status(
