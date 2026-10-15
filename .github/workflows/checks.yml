@@ -1,0 +1,53 @@
+name: Checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Controller contracts
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+  payloads:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned SDK and compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ps5-tools"
+          cd "$RUNNER_TEMP/ps5-tools"
+          curl -fL --retry 2 -o sdk.zip https://github.com/ps5-payload-dev/sdk/releases/download/v0.43/ps5-payload-sdk.zip
+          curl -fL --retry 2 -o llvm.tar.zst https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.3/LLVM-23.1.3-Linux-X64.tar.zst
+          echo 'a9cc9929f21b2b2c5d5b309f3bab4997067c45281c0622cf4838b1aecba66fcb  sdk.zip' | sha256sum -c -
+          echo '14d2f701eb68fb799001bdea6231048f3990690fa2f406d563555ff8f744daba  llvm.tar.zst' | sha256sum -c -
+          unzip -q sdk.zip
+          zstd --long=30 -dc llvm.tar.zst | tar -xf -
+          echo "PS5_PAYLOAD_SDK=$RUNNER_TEMP/ps5-tools/ps5-payload-sdk" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/ps5-tools/LLVM-23.1.3-Linux-X64/bin" >> "$GITHUB_PATH"
+      - name: Build release payloads
+        run: make -C payload release
+      - name: Check ELF layout and copied code
+        shell: bash
+        run: |
+          set -euo pipefail
+          for elf in payload/PoorDS4rc51-recovery.elf payload/PoorDS4-status.elf payload/PoorDS4-stop.elf; do
+            python3 tools/check_elf.py "$elf"
+          done
+          python3 tools/check_copied_code.py payload/PoorDS4rc51-recovery.elf --kind reader --output "$RUNNER_TEMP/reader.json"
+          python3 tools/check_copied_code.py payload/PoorDS4rc51-recovery.elf --kind game --output "$RUNNER_TEMP/game.json"

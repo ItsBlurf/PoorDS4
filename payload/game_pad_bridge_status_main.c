@@ -15,6 +15,16 @@
 #include <ps5/payload.h>
 
 #include "wireless_ds4.h"
+#include "pad_types.h"
+
+/* Same published application-info ABI already used by the supervisor. */
+typedef struct app_info {
+    uint32_t app_id;
+    uint64_t unknown1;
+    char title_id[14];
+    char unknown2[0x3c];
+} app_info_t;
+extern int sceKernelGetAppInfo(pid_t pid, app_info_t *info);
 
 #define SUPERVISOR_REPORT "/data/poords4/game-pad-bridge-supervisor.txt"
 #define STATUS_REPORT     "/data/poords4/game-pad-bridge-status.txt"
@@ -94,6 +104,40 @@ parse_bridge_identity(const char *buffer, pid_t *out_pid,
     return 0;
 }
 
+/* Export this helper's own fresh stream, rather than reopening a potentially
+ * historical report or loading another file-transfer payload. */
+static int
+export_status_report(FILE *report)
+{
+    enum { REPORT_LIMIT = 64 * 1024 };
+    if (fflush(report) != 0 || fseek(report, 0, SEEK_SET) != 0) {
+        printf("POORDS4_STATUS_REPORT_ERROR schema=1 phase=prepare errno=%d\n", errno);
+        return -1;
+    }
+    char buffer[4096];
+    size_t total = 0;
+    int io_result = 0;
+    printf("POORDS4_STATUS_REPORT_BEGIN schema=1\n");
+    while (total < REPORT_LIMIT) {
+        size_t remaining = REPORT_LIMIT - total;
+        size_t amount = remaining < sizeof(buffer) ? remaining : sizeof(buffer);
+        size_t received = fread(buffer, 1, amount, report);
+        if (received == 0)
+            break;
+        if (fwrite(buffer, 1, received, stdout) != received) {
+            io_result = -1;
+            break;
+        }
+        total += received;
+    }
+    if (ferror(report))
+        io_result = -1;
+    int truncated = total == REPORT_LIMIT;
+    printf("POORDS4_STATUS_REPORT_END schema=1 bytes=%zu io_result=%d truncated=%d\n",
+           total, io_result, truncated);
+    return io_result == 0 && !truncated ? 0 : -1;
+}
+
 int
 main(void)
 {
@@ -122,12 +166,31 @@ main(void)
     int bridge_result = bridge_identity_result == 0
         ? wireless_ds4_game_bridge_status(
               bridge_pid, bridge_args, &bridge) : -1;
+    app_info_t appinfo;
+    memset(&appinfo, 0, sizeof(appinfo));
+    int app_info_result = bridge_pid > 0
+        ? sceKernelGetAppInfo(bridge_pid, &appinfo) : -1;
 
-    FILE *f = fopen(STATUS_REPORT_TMP, "w");
+    FILE *f = fopen(STATUS_REPORT_TMP, "w+");
     if (!f) {
         payload_exit(1);
         return 0;
     }
+
+    fprintf(f, "game_app_info_result=0x%08x\ngame_app_id=0x%08x\ngame_title_id=%.14s\n",
+            (uint32_t)app_info_result, appinfo.app_id,
+            app_info_result == 0 ? appinfo.title_id : "UNKNOWN");
+    fprintf(f, "reader_discovery_available=%u\nreader_discovery_queries=%u\n"
+        "reader_discovery_open_calls=%u\nreader_discovery_opened=%u\n"
+        "reader_discovery_closed=%u\nreader_discovery_close_errors=%u\n"
+        "reader_discovery_disabled=%u\nreader_discovery_refresh_requested=%u\n"
+        "reader_discovery_last_lookup_result=0x%08x\nreader_discovery_last_open_result=0x%08x\n",
+        reader.discovery_available, reader.discovery_queries,
+        reader.discovery_open_calls, reader.discovery_opened,
+        reader.discovery_closed, reader.discovery_close_errors,
+        reader.discovery_disabled, reader.discovery_refresh_requested,
+        (uint32_t)reader.discovery_last_lookup_result,
+        (uint32_t)reader.discovery_last_open_result);
 
     fprintf(f,
         "mode=read-only-game-bridge-status\n"
@@ -207,6 +270,83 @@ main(void)
         (unsigned long long)bridge.native_connected_frames,
         bridge.event_ring_head);
 
+    fprintf(f,"empty_read_diag_available=%u\nempty_read_buffer_restores=%llu\n"
+        "empty_read_native_disconnected=%llu\n",
+        bridge.empty_read_diag_available,
+        (unsigned long long)bridge.empty_read_buffer_restores,
+        (unsigned long long)bridge.empty_read_native_disconnected);
+
+    /* Source ordinals are separate from game player indices. Packet evidence
+     * uses the guarded reader, independently of the bulk health snapshot. */
+    fprintf(f, "--- source packet snapshots ---\n");
+    for (unsigned source_slot = 0; source_slot < POORDS4_MAX_SLOTS; ++source_slot) {
+        ScePadData source_pad;
+        uint32_t source_seq = 0;
+        memset(&source_pad, 0, sizeof(source_pad));
+        int packet_result = reader_result == 0
+            ? wireless_ds4_remote_reader_read_slot(
+                reader_pid, reader_args, source_slot,
+                &source_pad, sizeof(source_pad), &source_seq)
+            : -1;
+        fprintf(f, "source_feed[%u]: packet_result=%d", source_slot, packet_result);
+        if (packet_result == 0)
+            fprintf(f,
+                " seq=%u connected=%u count=%u timestamp=%llu buttons=0x%08x "
+                "sticks=%u,%u,%u,%u triggers=%u,%u",
+                source_seq, source_pad.connected, source_pad.count,
+                (unsigned long long)source_pad.timestamp, source_pad.buttons,
+                source_pad.leftStick.x, source_pad.leftStick.y,
+                source_pad.rightStick.x, source_pad.rightStick.y,
+                source_pad.analogButtons.l2, source_pad.analogButtons.r2);
+        fputc('\n', f);
+    }
+
+    fprintf(f,"trigger_state_available=%u\ntrigger_state_calls=%llu\n"
+        "trigger_state_overrides=%llu\ntrigger_state_native_result=0x%08x\n",
+        bridge.trigger_state_available,(unsigned long long)bridge.trigger_state_calls,
+        (unsigned long long)bridge.trigger_state_overrides,
+        (uint32_t)bridge.trigger_state_native_result);
+    fprintf(f,"trigger_effect_available=%u\ntrigger_effect_set_calls=%llu\n"
+        "trigger_effect_set_accepts=%llu\ntrigger_effect_state_overrides=%llu\n"
+        "trigger_effect_native_result=0x%08x\n",
+        bridge.trigger_effect_available,(unsigned long long)bridge.trigger_effect_set_calls,
+        (unsigned long long)bridge.trigger_effect_set_accepts,
+        (unsigned long long)bridge.trigger_effect_state_overrides,
+        (uint32_t)bridge.trigger_effect_native_result);
+    fprintf(f,"trigger_effect_diag_available=%u\n",bridge.trigger_effect_diag_available);
+    if(bridge.trigger_effect_diag_available){
+        fprintf(f,"trigger_effect_compat_successes=%llu\ntrigger_effect_cached_unavailable=%llu\n"
+            "trigger_effect_legacy_receiver_active=%u\n",
+            (unsigned long long)bridge.trigger_effect_compat_successes,
+            (unsigned long long)bridge.trigger_effect_cached_unavailable,
+            bridge.trigger_effect_legacy_receiver_active);
+        static const char *const reasons[9]={"accepted","session_inactive","unmatched_handle",
+            "native_dualsense","simulated","invalid_input_pointer","input_lease_unavailable",
+            "invalid_command","cache_contention"};
+        fprintf(f,"trigger_effect_last_skip=%u\ntrigger_effect_last_slot=%d\n"
+            "trigger_effect_last_call_handle=0x%08x\ntrigger_effect_last_mask=0x%08x\n"
+            "trigger_effect_last_left_mode=0x%08x\ntrigger_effect_last_right_mode=0x%08x\n",
+            bridge.trigger_effect_last_skip,bridge.trigger_effect_last_slot,
+            (uint32_t)bridge.trigger_effect_last_call_handle,bridge.trigger_effect_last_mask,
+            bridge.trigger_effect_last_left_mode,bridge.trigger_effect_last_right_mode);
+        for(unsigned reason=0;reason<9;reason++)
+            fprintf(f,"trigger_effect_route_%s=%llu\n",reasons[reason],
+                (unsigned long long)bridge.trigger_effect_skip_counts[reason]);
+    }
+    fprintf(f,"device_class_available=%u\ndevice_class_calls=%llu\ndevice_class_errors=%llu\n"
+        "device_class_matched_calls=%llu\ndevice_class_last_result=0x%08x\n"
+        "device_class_last_handle=0x%08x\ndevice_class_last_slot=%d\ndevice_class_last_value=%d\n",
+        bridge.device_class_available,(unsigned long long)bridge.device_class_calls,
+        (unsigned long long)bridge.device_class_errors,(unsigned long long)bridge.device_class_matched_calls,
+        (uint32_t)bridge.device_class_last_result,(uint32_t)bridge.device_class_last_handle,
+        bridge.device_class_last_slot,bridge.device_class_last_value);
+    fprintf(f,"vibration_available=%u\nvibration_calls=%llu\nvibration_mode_calls=%llu\n"
+        "vibration_publications=%llu\nvibration_native_calls=%llu\nvibration_failures=%llu\n"
+        "vibration_last_caller=0x%08x\nvibration_native_result=0x%08x\nvibration_last_mode=%d\n",
+        bridge.vibration_available,(unsigned long long)bridge.vibration_calls,
+        (unsigned long long)bridge.vibration_mode_calls,(unsigned long long)bridge.vibration_publications,
+        (unsigned long long)bridge.vibration_native_calls,(unsigned long long)bridge.vibration_failures,
+        (uint32_t)bridge.vibration_last_caller,(uint32_t)bridge.vibration_native_result,bridge.vibration_last_mode);
     fprintf(f, "--- observed handles ---\n");
     for (unsigned i = 0; i < 4u; ++i) {
         fprintf(f, "observed_handle[%u]=0x%08x (calls=%llu)\n",
@@ -312,8 +452,31 @@ main(void)
     }
 
     fprintf(f, "--- supervisor ---\n%s", supervisor);
-    fclose(f);
-    (void)rename(STATUS_REPORT_TMP, STATUS_REPORT);
-    payload_exit(supervisor_length >= 0 ? 0 : 1);
+    int report_export_result = export_status_report(f);
+    int report_file_result = fclose(f);
+    if (report_file_result == 0)
+        report_file_result = rename(STATUS_REPORT_TMP, STATUS_REPORT);
+    /* Export this local snapshot directly, rather than requiring an FTP
+     * deployment to read a possibly historical status file. Completion below
+     * means this helper completed; the result fields establish snapshot validity. */
+    printf("POORDS4_STATUS_BEGIN schema=2\n"
+           "game_app_info_result=0x%08x\ngame_app_id=0x%08x\ngame_title_id=%.14s\n"
+           "reader_snapshot_result=%d\nreader_owner_pid=%d\nreader_connected=%u\n"
+           "reader_buttons=0x%08x\nreader_triggers=%u,%u\n"
+           "bridge_snapshot_result=%d\nbridge_pid=%d\nbridge_ready=%d\nbridge_active=%u\n"
+           "bridge_read_state_calls=%llu\nbridge_read_calls=%llu\n"
+           "bridge_handle_mismatch_calls=%llu\n"
+           "report_export_result=%d\nreport_file_result=%d\nPOORDS4_STATUS_END schema=2\n",
+           (uint32_t)app_info_result, appinfo.app_id,
+           app_info_result == 0 ? appinfo.title_id : "UNKNOWN",
+           reader_result, reader.owner_pid, reader.connected, reader.buttons,
+           reader.left_trigger, reader.right_trigger, bridge_result, bridge_pid,
+           bridge.bridge_ready, bridge.active, (unsigned long long)bridge.read_state_calls,
+           (unsigned long long)bridge.read_calls,
+           (unsigned long long)bridge.handle_mismatch_calls,
+           report_export_result, report_file_result);
+    fflush(stdout);
+    payload_exit(supervisor_length >= 0 && report_export_result == 0 &&
+                 report_file_result == 0 ? 0 : 1);
     return 0;
 }

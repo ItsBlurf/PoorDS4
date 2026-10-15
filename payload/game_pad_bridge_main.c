@@ -21,6 +21,7 @@
 
 #include "pad_types.h"
 #include "wireless_ds4.h"
+#include "game_rumble_relay.h"
 
 typedef struct app_info {
     uint32_t app_id;
@@ -391,6 +392,10 @@ static int
 teardown_game_bridge(pid_t game_pid, intptr_t bridge_args,
                      int allow_target_syscalls, const char **out_mode)
 {
+    if (wireless_ds4_game_bridge_image_state(game_pid) > 0) {
+        if (out_mode) *out_mode = "abandon-replaced-image";
+        return wireless_ds4_game_bridge_abandon();
+    }
     if (!process_alive(game_pid)) {
         if (out_mode) *out_mode = "abandon-dead";
         return wireless_ds4_game_bridge_abandon();
@@ -596,7 +601,10 @@ typedef enum {
     SESSION_END_BRIDGE_HEALTH_FAILED = 4,
     SESSION_END_LIFECYCLE = 5,
     SESSION_END_CLEANUP_FAILED = 6,
-    SESSION_END_RESET_REQUESTED = 7
+    SESSION_END_RESET_REQUESTED = 7,
+    SESSION_END_GAME_IMAGE_CHANGED = 8,
+    SESSION_END_SOURCE_USERS_ADDED = 9,
+    SESSION_END_SOURCE_DEVICE_ADDED = 10
 } GameSessionEndReason;
 
 static const char *
@@ -619,12 +627,73 @@ game_session_end_reason_name(GameSessionEndReason reason)
         return "cleanup_failed";
     case SESSION_END_RESET_REQUESTED:
         return "reset_requested";
+    case SESSION_END_GAME_IMAGE_CHANGED:
+        return "game_image_changed";
+    case SESSION_END_SOURCE_USERS_ADDED:
+        return "source_users_added";
+    case SESSION_END_SOURCE_DEVICE_ADDED:
+        return "source_device_added";
     }
     return "unknown";
 }
 
 static uint32_t
 collect_user_candidates(int32_t user_ids[POORDS4_MAX_USER_CANDIDATES]);
+
+static int32_t g_source_candidate_users[POORDS4_MAX_USER_CANDIDATES];
+static uint32_t g_source_candidate_count;
+static int32_t g_pending_source_user = -1;
+static unsigned g_pending_source_user_samples;
+
+/* Remember the candidates actually considered by a successful bootstrap,
+ * including native DS5 users. Merely reordering foreground/login users must
+ * not restart a healthy source. Device admission remains in the reader. */
+static void
+record_source_user_candidates(const int32_t *users, uint32_t count)
+{
+    g_source_candidate_count = count <= POORDS4_MAX_USER_CANDIDATES ? count : 0;
+    for (unsigned i = 0; i < g_source_candidate_count; ++i)
+        g_source_candidate_users[i] = users[i];
+    g_pending_source_user = -1;
+    g_pending_source_user_samples = 0;
+}
+
+static int
+poll_source_user_additions(void)
+{
+    int32_t users[4] = {-1, -1, -1, -1};
+    int32_t added = -1;
+    if (!g_source_candidate_count ||
+        sceUserServiceGetLoginUserIdList(users) != 0) {
+        g_pending_source_user = -1;
+        g_pending_source_user_samples = 0;
+        return 0;
+    }
+    for (unsigned i = 0; i < 4; ++i) {
+        if (users[i] < 0)
+            continue;
+        unsigned known = 0;
+        for (unsigned j = 0; j < g_source_candidate_count; ++j)
+            known |= users[i] == g_source_candidate_users[j];
+        if (!known && (added < 0 || users[i] < added))
+            added = users[i];
+    }
+    if (added < 0) {
+        g_pending_source_user = -1;
+        g_pending_source_user_samples = 0;
+        return 0;
+    }
+    if (added != g_pending_source_user) {
+        g_pending_source_user = added;
+        g_pending_source_user_samples = 1;
+        return 0;
+    }
+    if (++g_pending_source_user_samples < 2)
+        return 0;
+    poords4_log("[PoorDS4] new login user=0x%08x; refreshing source admission\n",
+                (uint32_t)added);
+    return 1;
+}
 
 static inline int
 is_reset_combo_held(uint32_t buttons, uint8_t l2, uint8_t r2)
@@ -639,8 +708,8 @@ is_reset_combo_held(uint32_t buttons, uint8_t l2, uint8_t r2)
 static void
 make_neutral_connected_pad(ScePadData *pad)
 {
-    uint64_t timestamp = pad->timestamp;
-    uint8_t count = pad->count;
+    /* This is an output builder: callers may pass an uninitialized local.
+     * The recovery publisher carries the installed slot's known metadata. */
     memset(pad, 0, sizeof(*pad));
     pad->leftStick.x = 128;
     pad->leftStick.y = 128;
@@ -651,8 +720,6 @@ make_neutral_connected_pad(ScePadData *pad)
     pad->touchData.fingers = 0;
     pad->touchData.touch[0].finger = 0x80;
     pad->touchData.touch[1].finger = 0x80;
-    pad->timestamp = timestamp;
-    pad->count = count;
 }
 
 static void
@@ -994,11 +1061,14 @@ feed_multi_controller_slots(pid_t reader_pid, intptr_t reader_args,
 {
     static int s_prev_fed_mask = 0;
     int current_fed_mask = 0;
+    (void)primary_pad; /* Secondary slots require their own attributed feed. */
     refresh_simulated_pads_config();
 
     uint64_t now_ms = monotonic_milliseconds();
     for (unsigned s = 0; s < POORDS4_MAX_SLOTS; ++s) {
-        if (s == primary_slot)
+        /* Reader discovery ordinals are not game-player indices. */
+        if (s == primary_slot || !bridge_status ||
+            bridge_status->slots[s].is_dualsense)
             continue;
         if (g_sim_mask & (1 << s)) {
             current_fed_mask |= (1 << s);
@@ -1022,7 +1092,7 @@ feed_multi_controller_slots(pid_t reader_pid, intptr_t reader_args,
             ScePadData physical_pad;
             uint32_t slot_seq = 0;
             if (reader_pid > 0 && reader_args > 0 &&
-                wireless_ds4_remote_reader_read_slot(
+                wireless_ds4_remote_reader_read_game_slot(
                     reader_pid, reader_args, s,
                     &physical_pad, sizeof(physical_pad), &slot_seq) == 0 &&
                 physical_pad.connected != 0) {
@@ -1030,19 +1100,47 @@ feed_multi_controller_slots(pid_t reader_pid, intptr_t reader_args,
                 (void)wireless_ds4_game_bridge_update_slot(
                     game_pid, bridge_args, s, &physical_pad, sizeof(physical_pad),
                     0 /* is_simulated */, 0 /* is_dualsense */);
-            } else if (bridge_status && bridge_status->slots[s].pad_handle > 0 &&
-                       bridge_status->slots[s].user_matches &&
-                       !bridge_status->slots[s].is_dualsense && primary_pad) {
-                current_fed_mask |= (1 << s);
-                (void)wireless_ds4_game_bridge_update_slot(
-                    game_pid, bridge_args, s, primary_pad, sizeof(*primary_pad),
-                    0 /* is_simulated */, 0 /* is_dualsense */);
             } else if (s_prev_fed_mask & (1 << s)) {
                 (void)wireless_ds4_game_bridge_deactivate_slot(game_pid, bridge_args, s);
             }
         }
     }
     s_prev_fed_mask = current_fed_mask;
+}
+
+static void
+game_rumble_routes_open(PoorDS4GameRumbleRelay routes[POORDS4_MAX_SLOTS],
+    pid_t reader_pid,intptr_t reader_args,pid_t game_pid,intptr_t game_args,
+    unsigned primary_slot,uint64_t generation)
+{
+    for(unsigned slot=0;slot<POORDS4_MAX_SLOTS;slot++) {
+        int source_slot=slot==primary_slot?0:wireless_ds4_game_bridge_reader_slot(slot);
+        poords4_game_rumble_open_slot(&routes[slot],reader_pid,reader_args,
+            game_pid,game_args,slot,source_slot<0?0:(unsigned)source_slot,
+            source_slot<0?0:generation);
+        if(slot!=primary_slot && source_slot>0)
+            poords4_log("[PoorDS4] GAME RUMBLE SECONDARY slot=%u source_slot=%d route=%u\n",
+                slot,source_slot,routes[slot].enabled);
+    }
+}
+
+static void
+game_rumble_routes_tick(PoorDS4GameRumbleRelay routes[POORDS4_MAX_SLOTS],
+    uint64_t now,int game_alive)
+{
+    for(unsigned slot=0;slot<POORDS4_MAX_SLOTS;slot++)
+        poords4_game_rumble_tick(&routes[slot],now,game_alive,0);
+}
+
+static int
+game_rumble_routes_close(PoorDS4GameRumbleRelay routes[POORDS4_MAX_SLOTS],int game_alive)
+{
+    int result=0;
+    for(unsigned slot=0;slot<POORDS4_MAX_SLOTS;slot++) {
+        int closed=poords4_game_rumble_close(&routes[slot],game_alive);
+        if(closed && !result)result=closed;
+    }
+    return result;
 }
 
 static unsigned
@@ -1087,7 +1185,7 @@ run_game_session(pid_t reader_pid, intptr_t reader_args,
     GameSessionEndReason end_reason = SESSION_END_STOP_REQUESTED;
     uint64_t session_start_ms = monotonic_milliseconds();
     g_bridge_args = bridge_args;
-    PoorDS4GameBridgeStatus initial_status;
+    PoorDS4GameBridgeStatus initial_status = {0};
     unsigned primary_slot = 0;
     if (wireless_ds4_game_bridge_status(game_pid, bridge_args, &initial_status) == 0 &&
         initial_status.game_pad_index >= 0 && initial_status.game_pad_index < (int32_t)POORDS4_MAX_SLOTS) {
@@ -1098,10 +1196,32 @@ run_game_session(pid_t reader_pid, intptr_t reader_args,
     last_bridge_status = initial_status;
     write_supervisor_state(
         "active", game_pid, session, previous_output_frames, 1);
+    PoorDS4GameRumbleRelay rumbles[POORDS4_MAX_SLOTS];
+    game_rumble_routes_open(rumbles,reader_pid,reader_args,game_pid,bridge_args,primary_slot,session);
+    PoorDS4GameRumbleRelay *rumble=&rumbles[primary_slot];
+    uint64_t last_rumble_tick=0;
+    poords4_log("[PoorDS4] GAME RUMBLE route=%u slot=%u\n",rumble->enabled,primary_slot);
+#if defined(POORDS4_READER_ROUTE_QUALIFY)
+    int route_qualified=0;
+    static unsigned route_restart_state;
+#endif
     while (!lifecycle_should_stop()) {
+        int image_state = wireless_ds4_game_bridge_image_state(game_pid);
+        if (image_state != 0) {
+            poords4_log("[PoorDS4] PROC WATCH transition=%d pid=%d\n", image_state, game_pid);
+            end_reason = image_state == 1 ? SESSION_END_GAME_IMAGE_CHANGED :
+                         image_state == 2 ? SESSION_END_GAME_EXITED : SESSION_END_BRIDGE_HEALTH_FAILED;
+            if (image_state == 2) game_alive = 0;
+            break;
+        }
         ScePadData pad;
         uint32_t seq = 0;
         memset(&pad, 0, sizeof(pad));
+        uint64_t rumble_now=monotonic_milliseconds()*UINT64_C(1000000);
+        if(!last_rumble_tick || rumble_now-last_rumble_tick>=UINT64_C(33000000)) {
+            game_rumble_routes_tick(rumbles,rumble_now,game_alive);
+            last_rumble_tick=rumble_now;
+        }
         refresh_simulated_pads_config();
         int sim_on_primary = (g_sim_mask & (1 << primary_slot)) != 0;
 
@@ -1132,6 +1252,7 @@ run_game_session(pid_t reader_pid, intptr_t reader_args,
             }
             if (seq != last_seq) {
                 input_frames++;
+                int neutral_for_disconnect = !pad.connected;
                 if (pad.touchData.fingers == 0) {
                     pad.touchData.touch[0].finger |= 0x80;
                     pad.touchData.touch[1].finger |= 0x80;
@@ -1228,10 +1349,12 @@ run_game_session(pid_t reader_pid, intptr_t reader_args,
                         disconnect_grace_events++;
                         poords4_log(
                             "[PoorDS4] source disconnect grace begin "
-                            "event=%u limit_ms=%llu\n",
+                            "event=%u limit_ms=%llu source_count=%u "
+                            "source_timestamp=%llu\n",
                             disconnect_grace_events,
                             (unsigned long long)
-                                SOURCE_DISCONNECT_GRACE_MS);
+                                SOURCE_DISCONNECT_GRACE_MS,
+                            pad.count, (unsigned long long)pad.timestamp);
                     }
                     disconnect_frames++;
                     uint64_t disconnect_elapsed_ms =
@@ -1298,10 +1421,14 @@ run_game_session(pid_t reader_pid, intptr_t reader_args,
                     disconnect_frames = 0;
                     disconnect_grace_expired = 0;
                 }
-                if (wireless_ds4_game_bridge_update_slot(
+                int publish_result = neutral_for_disconnect
+                    ? wireless_ds4_game_bridge_update(
+                        game_pid, bridge_args, &pad, sizeof(pad))
+                    : wireless_ds4_game_bridge_update_slot(
                         game_pid, bridge_args, primary_slot,
                         &pad, sizeof(pad),
-                        sim_on_primary ? 1 : 0, 0) == 0) {
+                        sim_on_primary ? 1 : 0, 0);
+                if (publish_result == 0) {
                     output_frames++;
                     consecutive_write_failures = 0;
                 } else {
@@ -1397,12 +1524,66 @@ run_game_session(pid_t reader_pid, intptr_t reader_args,
                     last_bridge_status.last_native_timestamp,
                 last_bridge_status.last_native_count,
                 last_bridge_status.import_hook_count);
+            poords4_log("[PoorDS4] GAME RUMBLE requests=%llu sent=%llu native_ack=%llu pending=%u errors=%llu route=%u waiting=%u rebindings=%llu cancellations=%llu stale_requests=%llu status_waits=%llu\n",
+                (unsigned long long)rumble->requests,(unsigned long long)rumble->submissions,
+                (unsigned long long)rumble->acknowledgments,rumble->pending,
+                (unsigned long long)rumble->errors,rumble->enabled,rumble->waiting,
+                (unsigned long long)rumble->rebindings,(unsigned long long)rumble->cancellations,
+                (unsigned long long)rumble->stale_requests,
+                (unsigned long long)rumble->status_waits);
+            for(unsigned slot=0;slot<POORDS4_MAX_SLOTS;slot++) {
+                if(slot==primary_slot || !rumbles[slot].generation)continue;
+                PoorDS4GameRumbleRelay *secondary=&rumbles[slot];
+                poords4_log("[PoorDS4] GAME RUMBLE SECONDARY slot=%u source_slot=%u requests=%llu sent=%llu native_ack=%llu errors=%llu route=%u waiting=%u\n",
+                    slot,secondary->source_slot,(unsigned long long)secondary->requests,
+                    (unsigned long long)secondary->submissions,(unsigned long long)secondary->acknowledgments,
+                    (unsigned long long)secondary->errors,secondary->enabled,secondary->waiting);
+            }
+#if defined(POORDS4_READER_ROUTE_QUALIFY)
+            /* Recovery follows neutral publication. Match that phase rather
+             * than checking the intentionally inactive installer arguments. */
+            if(!route_qualified) {
+                int result=wireless_ds4_game_bridge_rebind_readers(
+                    game_pid,bridge_args,&g_pad_source);
+                poords4_log("[PoorDS4] READER ROUTE QUALIFY result=%d consumer=current-game-table phase=after-publication remap=supervisor-only\n",result);
+                route_qualified=1;
+                if(!result && !route_restart_state) {
+                    /* Exercise the existing owned-reader recovery exactly
+                     * once; never restart the console, loader or source service. */
+                    route_restart_state=1;
+                    poords4_log("[PoorDS4] READER ROUTE QUALIFY action=owned-reader-restart requested=1\n");
+                    end_reason=SESSION_END_READER_FAILED;
+                    break;
+                } else if(!result && route_restart_state==1) {
+                    route_restart_state=2;
+                    poords4_log("[PoorDS4] READER ROUTE QUALIFY owned-reader-restart completed=1 hooks=retained\n");
+                }
+            }
+#endif
+            if(last_bridge_status.trigger_state_available)
+                poords4_log("[PoorDS4] TRIGGER STATE calls=%llu neutral_overrides=%llu native=0x%08x\n",
+                    (unsigned long long)last_bridge_status.trigger_state_calls,
+                    (unsigned long long)last_bridge_status.trigger_state_overrides,
+                    (uint32_t)last_bridge_status.trigger_state_native_result);
+            if(last_bridge_status.vibration_available)
+                poords4_log("[PoorDS4] GAME VIBRATION calls=%llu mode_calls=%llu published=%llu native=%llu failed=%llu caller=0x%08x native_result=0x%08x mode=%d\n",
+                    (unsigned long long)last_bridge_status.vibration_calls,
+                    (unsigned long long)last_bridge_status.vibration_mode_calls,
+                    (unsigned long long)last_bridge_status.vibration_publications,
+                    (unsigned long long)last_bridge_status.vibration_native_calls,
+                    (unsigned long long)last_bridge_status.vibration_failures,
+                    (uint32_t)last_bridge_status.vibration_last_caller,
+                    (uint32_t)last_bridge_status.vibration_native_result,last_bridge_status.vibration_last_mode);
             write_supervisor_state(
                 "active", game_pid, session,
                 previous_output_frames + output_frames, 0);
             last_health_frame = input_frames;
         }
         loop_count++;
+        if ((loop_count % 120u) == 0 && poll_source_user_additions()) {
+            end_reason = SESSION_END_SOURCE_USERS_ADDED;
+            break;
+        }
         if ((loop_count % 4u) == 0 && bridge_args != 0 && game_alive) {
             if (wireless_ds4_game_bridge_check_reset(game_pid, bridge_args) == 1) {
                 poords4_log(
@@ -1450,6 +1631,13 @@ run_game_session(pid_t reader_pid, intptr_t reader_args,
             end_reason = SESSION_END_RESET_REQUESTED;
             break;
         }
+        if (last_reader_status.discovery_refresh_requested) {
+            poords4_log("[PoorDS4] stable new source device user=0x%08x index=%d; refreshing admission\n",
+                (uint32_t)last_reader_status.discovery_user,
+                last_reader_status.discovery_index);
+            end_reason = SESSION_END_SOURCE_DEVICE_ADDED;
+            break;
+        }
         if (consecutive_read_failures >= 240u ||
             consecutive_write_failures >= 1200u ||
             consecutive_bridge_health_failures >= 5u ||
@@ -1479,7 +1667,12 @@ run_game_session(pid_t reader_pid, intptr_t reader_args,
     }
     if (g_shutdown_requested && end_reason == SESSION_END_STOP_REQUESTED)
         end_reason = SESSION_END_LIFECYCLE;
-    if (process_alive(game_pid)) {
+    int final_image_state = wireless_ds4_game_bridge_image_state(game_pid);
+    if (final_image_state > 0) {
+        end_reason = final_image_state == 1 ? SESSION_END_GAME_IMAGE_CHANGED : SESSION_END_GAME_EXITED;
+        if (final_image_state == 2) game_alive = 0;
+    }
+    if (!final_image_state && process_alive(game_pid)) {
         PoorDS4GameBridgeStatus final_status;
         memset(&final_status, 0, sizeof(final_status));
         if (wireless_ds4_game_bridge_status(game_pid, bridge_args, &final_status) == 0 &&
@@ -1489,8 +1682,15 @@ run_game_session(pid_t reader_pid, intptr_t reader_args,
     }
     int keep_bridge_for_reader_recovery =
         end_reason == SESSION_END_READER_FAILED &&
-        !g_shutdown_requested && !g_skip_remote_cleanup &&
+        !final_image_state && !g_shutdown_requested && !g_skip_remote_cleanup &&
         process_alive(game_pid);
+    /* Exec destroyed the old game mapping. Do not neutralize or restore old
+     * addresses in the new image; source commands have bounded expiry. */
+    int rumble_cleanup=final_image_state>0?-3:g_skip_remote_cleanup?-2:game_rumble_routes_close(rumbles,game_alive);
+    poords4_log("[PoorDS4] GAME RUMBLE cleanup=%d requests=%llu sent=%llu native_ack=%llu errors=%llu\n",
+        rumble_cleanup,(unsigned long long)rumble->requests,(unsigned long long)rumble->submissions,
+        (unsigned long long)rumble->acknowledgments,(unsigned long long)rumble->errors);
+    if(rumble_cleanup==-1)end_reason=SESSION_END_CLEANUP_FAILED;
     int remove_result = 0;
     if (keep_bridge_for_reader_recovery) {
         ScePadData neutral;
@@ -1592,6 +1792,52 @@ collect_user_candidates(int32_t user_ids[POORDS4_MAX_USER_CANDIDATES])
     return count;
 }
 
+#if defined(POORDS4_RUMBLE_QUALIFY)
+/* Runs only in an explicitly built qualification controller, never silently
+ * in release. Zero-first; source native ACK must precede a bounded pulse. */
+static int
+rumble_qualification(pid_t pid,intptr_t args)
+{
+    PoorDS4RumbleStatus status;
+    int available=0;
+    for(unsigned attempt=0;attempt<50;attempt++) {
+        if(!wireless_ds4_reader_rumble_status(pid,args,&status) && status.connected && status.epoch) {
+            available=1;break;
+        }
+        usleep(10000);
+    }
+    if(!available){poords4_log("[PoorDS4] RUMBLE QUALIFY unavailable; input continues\n");return -1;}
+    for(unsigned step=0;step<3;step++) {
+        uint64_t sequence=0;
+        unsigned motor=step==1?32:0;
+        if(wireless_ds4_reader_rumble_submit(pid,args,(uint8_t)motor,(uint8_t)motor,&status,&sequence)) {
+            poords4_log("[PoorDS4] RUMBLE QUALIFY submit failed step=%u\n",step);return -1;
+        }
+        int applied=0;
+        for(unsigned attempt=0;attempt<50;attempt++) {
+            if(!wireless_ds4_reader_rumble_status(pid,args,&status) && status.observed>=sequence) {
+                poords4_log("[PoorDS4] RUMBLE QUALIFY step=%u sequence=%llu applied=%llu "
+                    "mode=0x%08x command=0x%08x stop=0x%08x rejection=%u quarantine=%u effect=%u "
+                    "identity=0x%08x device=0x%08x vid=0x%04x pid=0x%04x path=%u\n",
+                    step,(unsigned long long)sequence,(unsigned long long)status.applied,
+                    (uint32_t)status.mode_result,(uint32_t)status.command_result,
+                    (uint32_t)status.stop_result,status.rejection,status.quarantined,status.effect_active,
+                    (uint32_t)status.identity_result,(uint32_t)status.device_info_result,
+                    status.device_vendor,status.device_product,status.identity_path);
+                applied=status.applied==sequence && !status.mode_result && !status.command_result &&
+                    !status.quarantined && !status.rejection && (motor || !status.effect_active);
+                break;
+            }
+            usleep(10000);
+        }
+        if(!applied)return -1;
+        if(motor)usleep(180000);
+    }
+    poords4_log("[PoorDS4] RUMBLE QUALIFY complete native_ack=3 neutral=1\n");
+    return 0;
+}
+#endif
+
 static int
 start_wireless_reader(PoorDS4PadSource *source, pid_t *reader_pid,
                       intptr_t *reader_args, unsigned sessions,
@@ -1608,6 +1854,7 @@ start_wireless_reader(PoorDS4PadSource *source, pid_t *reader_pid,
         if (wireless_ds4_remote_reader_start(
                 user_ids, user_count, source,
                 reader_pid, reader_args) == 0) {
+            record_source_user_candidates(user_ids, user_count);
             g_reader_pid = *reader_pid;
             g_reader_args = *reader_args;
             g_pad_source = *source;
@@ -1704,6 +1951,7 @@ recover_wireless_reader_in_place(
             if (wireless_ds4_remote_reader_start(
                     users, user_count, &candidate,
                     &candidate_pid, &candidate_args) == 0) {
+                record_source_user_candidates(users, user_count);
                 int user_changed = (old_user_id >= 0 &&
                     (candidate.user_id != old_user_id ||
                      candidate.pad_index != old_pad_index));
@@ -1713,12 +1961,15 @@ recover_wireless_reader_in_place(
                 g_reader_pid = candidate_pid;
                 g_reader_args = candidate_args;
                 g_pad_source = candidate;
+                int route_result=user_changed?1:
+                    wireless_ds4_game_bridge_rebind_readers(
+                        game_pid,bridge_args,&candidate);
                 poords4_log(
                     "[PoorDS4] in-place reader recovery complete "
-                    "attempts=%u user=0x%08x index=%d user_changed=%d\n",
+                    "attempts=%u user=0x%08x index=%d user_changed=%d route_result=%d\n",
                     attempts, (uint32_t)candidate.user_id,
-                    candidate.pad_index, user_changed);
-                return user_changed ? 1 : 0;
+                    candidate.pad_index, user_changed,route_result);
+                return user_changed || route_result ? 1 : 0;
             }
             last_attempt_ms = now;
             if (attempts == 1 || (attempts % 10u) == 0)
@@ -1765,6 +2016,8 @@ main(void)
     }
 
     poords4_log_reset();
+    poords4_log("[PoorDS4] build=rc51-recovery-20261015r30-api-guards "
+                "imports=plt+nonplt transport=rc51 ps4=native trigger-state=neutral-compat rumble=game-relay\n");
     (void)unlink(GAME_BRIDGE_STOP_FILE);
     (void)unlink(GAME_BRIDGE_RESET_FILE);
     install_shutdown_signal_handlers();
@@ -1785,6 +2038,12 @@ main(void)
         poords4_log("[PoorDS4] wireless reader start failed\n");
         goto cleanup;
     }
+#if defined(POORDS4_RUMBLE_QUALIFY)
+    (void)rumble_qualification(reader_pid,reader_args);
+#endif
+#if defined(POORDS4_GAME_RUMBLE_QUALIFY)
+    (void)wireless_ds4_game_rumble_native_qualification(reader_pid,reader_args);
+#endif
     /* Reaching a validated DS4 reader is a successful payload startup even
      * when the user stops it before launching a game. */
     exit_code = 0;
@@ -1931,17 +2190,20 @@ main(void)
             launch_candidate_pid = -1;
             launch_candidate_since_ms = 0;
             write_supervisor_state(
-                find_result == -3
+                find_result == POORDS4_GAME_BRIDGE_NATIVE_PS4
+                    ? "native_ps4_passthrough" : (find_result == -3
                     ? "waiting_for_unique_game"
                     : (find_result == -4
-                        ? "waiting_game_modules" : "waiting_for_game"),
-                find_result == -4 ? observed_game_pid : -1,
+                        ? "waiting_game_modules" : "waiting_for_game")),
+                (find_result == -4 ||
+                 find_result == POORDS4_GAME_BRIDGE_NATIVE_PS4)
+                    ? observed_game_pid : -1,
                 sessions, total_output_frames, 0);
             if (sleep_interruptible(1000000) != 0)
                 break;
             continue;
         }
-        uint64_t now_ms = monotonic_milliseconds();
+    uint64_t now_ms = monotonic_milliseconds();
         if (launch_candidate_pid != observed_game_pid) {
             launch_candidate_pid = observed_game_pid;
             launch_candidate_since_ms = now_ms;
@@ -1966,15 +2228,27 @@ main(void)
         intptr_t bridge_args = 0;
         int install_result = wireless_ds4_game_bridge_install(
             &g_pad_source, &game_pid, &bridge_args);
-        if ((install_result == -2 || install_result == -3) &&
+        if (install_result == POORDS4_GAME_BRIDGE_IMAGE_CHANGED && POORDS4_AUTO_WATCH) {
+            launch_candidate_pid = game_pid;
+            launch_candidate_since_ms = 1;
+            retry_pid = -1;
+            install_retries = 0;
+            poords4_log("[PoorDS4] executable changed during install; rediscovering pid=%d\n", game_pid);
+            if (sleep_interruptible(250000) != 0) break;
+            continue;
+        }
+        if ((install_result == -2 || install_result == -3 ||
+             install_result == POORDS4_GAME_BRIDGE_NATIVE_PS4) &&
             POORDS4_AUTO_WATCH) {
             retry_pid = -1;
             install_retries = 0;
             write_supervisor_state(
-                install_result == -2
+                install_result == POORDS4_GAME_BRIDGE_NATIVE_PS4
+                    ? "native_ps4_passthrough" : (install_result == -2
                     ? "waiting_for_game"
-                    : "waiting_for_unique_game",
-                -1, sessions, total_output_frames, 0);
+                    : "waiting_for_unique_game"),
+                install_result == POORDS4_GAME_BRIDGE_NATIVE_PS4 ? game_pid : -1,
+                sessions, total_output_frames, 0);
             if (sleep_interruptible(1000000) != 0)
                 break;
             continue;
@@ -2162,7 +2436,7 @@ main(void)
                 }
                 if (recovery_result == 1) {
                     poords4_log(
-                        "[PoorDS4] wireless reader recovered on new user/slot; "
+                        "[PoorDS4] wireless reader recovered with changed user/slot/context; "
                         "reinstalling game bridge\n");
                     const char *recovery_cleanup_mode = NULL;
                     int recovery_cleanup = teardown_game_bridge(
@@ -2229,6 +2503,15 @@ main(void)
 
         if (!POORDS4_AUTO_WATCH || lifecycle_should_stop())
             break;
+        if (end_reason == SESSION_END_GAME_IMAGE_CHANGED && process_alive(game_pid)) {
+            poords4_log("[PoorDS4] executable replaced; reacquiring current image pid=%d\n", game_pid);
+            launch_candidate_pid = game_pid;
+            launch_candidate_since_ms = 1;
+            retry_pid = -1;
+            install_retries = 0;
+            if (sleep_interruptible(250000) != 0) break;
+            continue;
+        }
         if (end_reason == SESSION_END_CLEANUP_FAILED &&
             process_alive(game_pid)) {
             poords4_log(
@@ -2248,18 +2531,32 @@ main(void)
                 game_pid);
             continue;
         }
-        if (end_reason == SESSION_END_RESET_REQUESTED &&
+        if ((end_reason == SESSION_END_RESET_REQUESTED ||
+             end_reason == SESSION_END_SOURCE_USERS_ADDED ||
+             end_reason == SESSION_END_SOURCE_DEVICE_ADDED) &&
             process_alive(game_pid)) {
             poords4_log(
-                "[PoorDS4] controller reset shortcut triggered; "
+                "[PoorDS4] controller refresh reason=%s; "
                 "resetting reader and re-attaching pid=%d\n",
-                game_pid);
-            game_bridge_notify(
-                "PoorDS4: reset requested via controller shortcut");
+                game_session_end_reason_name(end_reason), game_pid);
+            if (end_reason == SESSION_END_RESET_REQUESTED)
+                game_bridge_notify(
+                    "PoorDS4: reset requested via controller shortcut");
+            int refresh_stop_result = 0;
             if (reader_pid > 0 && reader_args != 0 &&
                 process_alive(reader_pid)) {
-                (void)wireless_ds4_remote_reader_stop(
+                refresh_stop_result = wireless_ds4_remote_reader_stop(
                     reader_pid, reader_args);
+            }
+            if (refresh_stop_result != 0) {
+                poords4_log("[PoorDS4] controller refresh reader stop=%d; "
+                            "preserving identity and exiting owner without replacement\n",
+                            refresh_stop_result);
+                /* The game bridge has already been removed. Do not erase an
+                 * uncertain reader identity or start another reader. Its
+                 * existing owner watchdog performs final source cleanup. */
+                g_skip_remote_cleanup = 1;
+                break;
             }
             reader_pid = -1;
             reader_args = 0;

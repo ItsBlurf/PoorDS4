@@ -2,7 +2,7 @@ PS5_HOST ?=
 PORT     ?= 9021
 RC_VERSION := 51
 
-TARGET        := PoorDS4rc$(RC_VERSION).elf
+TARGET        := PoorDS4rc51-recovery.elf
 EXP_TARGET    := PoorDS4exp.elf
 STATUS_TARGET := PoorDS4-status.elf
 STOP_TARGET   := PoorDS4-stop.elf
@@ -13,22 +13,28 @@ endif
 
 include $(PS5_PAYLOAD_SDK)/toolchain/prospero.mk
 
+ifeq ($(OS),Windows_NT)
 CC := ps5-clang.cmd
 STRIP := llvm-strip
+endif
 
 CFLAGS  += -D__PROSPERO__ -Wall -Wextra -Wshadow -Wunreachable-code \
-	-Werror -g -O2 -fPIC \
-	-fno-stack-protector -ffunction-sections -fdata-sections \
+	-Werror -Wno-unused-but-set-global -g -O2 -fPIC \
+	-fno-stack-protector -fno-jump-tables -ffunction-sections -fdata-sections \
 	-fdebug-compilation-dir=.
 LDFLAGS      += -Wl,--gc-sections,--build-id=sha1
 RUNTIME_LIBS := -nodefaultlibs -lc -lkernel_web -lSceLibcInternal
 BRIDGE_LIBS  := $(RUNTIME_LIBS) -lSceUserService
 
+COMMON_HEADERS := $(wildcard *.h)
+HOST_CC ?= gcc
+PYTHON ?= python3
+
 .PHONY: all audit clean deploy release status stop
 
-all: $(TARGET) $(EXP_TARGET)
+all: $(TARGET)
 
-$(TARGET): game_pad_bridge_main.c wireless_ds4.c wireless_ds4.h pad_types.h
+$(TARGET): game_pad_bridge_main.c wireless_ds4.c $(COMMON_HEADERS)
 	$(CC) $(CFLAGS) -DPOORDS4_AUTO_WATCH=1 \
 		-DPOORDS4_RC_VERSION=$(RC_VERSION) -o $@ \
 		game_pad_bridge_main.c wireless_ds4.c $(LDFLAGS) $(BRIDGE_LIBS)
@@ -38,8 +44,7 @@ $(EXP_TARGET): $(TARGET)
 
 status: $(STATUS_TARGET)
 
-$(STATUS_TARGET): game_pad_bridge_status_main.c wireless_ds4.c \
-	wireless_ds4.h pad_types.h
+$(STATUS_TARGET): game_pad_bridge_status_main.c wireless_ds4.c $(COMMON_HEADERS)
 	$(CC) $(CFLAGS) -o $@ game_pad_bridge_status_main.c wireless_ds4.c \
 		$(LDFLAGS) $(RUNTIME_LIBS)
 
@@ -52,8 +57,11 @@ release: all status stop
 	$(STRIP) --strip-debug $(TARGET) $(STATUS_TARGET) $(STOP_TARGET)
 
 audit:
-	powershell -NoProfile -ExecutionPolicy Bypass \
-		-File ..\tests\static-audit.ps1
+ifeq ($(OS),Windows_NT)
+	powershell -NoProfile -ExecutionPolicy Bypass -File ../tests/static-audit.ps1 -HostCompiler "$(HOST_CC)"
+else
+	POORDS4_HOST_CC="$(HOST_CC)" $(PYTHON) -m unittest discover -s ../tests -p 'test_*.py' -v
+endif
 
 clean:
 	rm -f PoorDS4rc*.elf $(STATUS_TARGET) $(STOP_TARGET)

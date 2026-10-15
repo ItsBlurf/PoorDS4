@@ -1,0 +1,42 @@
+name: Bug report
+description: Report a DS4 input, controller routing or payload problem.
+body:
+  - type: input
+    id: build
+    attributes:
+      label: PoorDS4 version or build
+      placeholder: Release tag or build stamp from the log
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: PS5 firmware and payload environment
+      description: Include relevant kstuff/loader versions if known.
+    validations:
+      required: true
+  - type: input
+    id: application
+    attributes:
+      label: Game or homebrew and version
+    validations:
+      required: true
+  - type: textarea
+    id: controllers
+    attributes:
+      label: Controller setup
+      description: Models, profiles, connection order and any hot-plug steps.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Include steps, expected behavior, and whether it starts at launch or after an application/controller change.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Attach fresh status/runtime logs. Remove console addresses, account identifiers and other private information.

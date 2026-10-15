@@ -1,0 +1,81 @@
+{
+  "provenance": "https://github.com/ItsBlurf/PoorDS4/issues/8",
+  "source_archive_sha256": "42657a9cbaf74ecfd93adf54b2d0fbe4044352e6ceafe2a1f7c9549093dfd36f",
+  "normalization": "Reported stride/controller-index layout, deterministic user identifiers, and only five routing fields retained. Other bytes zeroed. Synthetic host table, not gameplay evidence.",
+  "stride": 1480,
+  "recorded_bytes": 1152,
+  "table_address": 1114112,
+  "field_offsets": {
+    "connected": [
+      24,
+      4
+    ],
+    "handle": [
+      28,
+      4
+    ],
+    "user_id": [
+      36,
+      4
+    ],
+    "vendor": [
+      96,
+      2
+    ],
+    "product": [
+      98,
+      2
+    ]
+  },
+  "slot_count": 24,
+  "entries": [
+    {
+      "index": 0,
+      "connected": 1,
+      "handle": 52430592,
+      "user_id": 33,
+      "vendor": 1356,
+      "product": 3302
+    },
+    {
+      "index": 1,
+      "connected": 0,
+      "handle": 52496129,
+      "user_id": 33,
+      "vendor": 0,
+      "product": 0
+    },
+    {
+      "index": 2,
+      "connected": 0,
+      "handle": 52692738,
+      "user_id": 11,
+      "vendor": 0,
+      "product": 0
+    },
+    {
+      "index": 3,
+      "connected": 0,
+      "handle": 52758275,
+      "user_id": 11,
+      "vendor": 0,
+      "product": 0
+    },
+    {
+      "index": 4,
+      "connected": 0,
+      "handle": 52954884,
+      "user_id": 22,
+      "vendor": 0,
+      "product": 0
+    },
+    {
+      "index": 5,
+      "connected": 0,
+      "handle": 53020421,
+      "user_id": 22,
+      "vendor": 0,
+      "product": 0
+    }
+  ]
+}

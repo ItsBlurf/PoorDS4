@@ -1,86 +1,80 @@
-# Architecture
+# Architecture and source guide
 
-## Source side
+PoorDS4 separates the console input source from the application consuming it.
+The source reader publishes per-controller packets; the supervisor manages
+application/source lifetime; game-owned callbacks adapt the application's pad
+imports.
 
-PoorDS4 attaches only to the system `SceRemotePlay` process during source
-discovery. It resolves public `libScePad` functions, identifies a connected
-DS4, validates one controller-information result, then starts a small reader
-thread owned by RemotePlay. The reader publishes 120-byte `ScePadData`
-snapshots and exits if its owning payload disappears.
+```mermaid
+flowchart LR
+  DS4["DS4 on the console"] --> Sony["Sony input source"]
+  Sony --> Reader["Source reader"]
+  Reader --> Supervisor["Supervisor and per-source snapshots"]
+  Supervisor --> Bridge["Game-owned controller bridge"]
+  Native["Original libScePad APIs"] --> Bridge
+  Bridge --> App["Game or homebrew"]
+```
 
-The reader prefers the public queued `scePadRead(handle, frame, 1)` path and
-uses `scePadReadState` only when the queue is empty or unavailable. This keeps
-the verified later-firmware state path while avoiding an idle secondary-thread
-state cache on older libScePad revisions. Both raw results and path counters
-are included in the normal health log and status report.
+## Source map
 
-Before opening the pad, the stopped RemotePlay main thread receives process
-privilege, login-user count, and focus setup through resolved public exports.
-Their addresses and return values are recorded; the injected reader thread
-does not perform setup IPC concurrently with RemotePlay.
+| File | Responsibility |
+| --- | --- |
+| `payload/game_pad_bridge_main.c` | Supervisor, application handoff, source recovery and packet publication. |
+| `payload/wireless_ds4.c` | Source discovery, ABI validation, import installation, copied readers and game callbacks. |
+| `payload/wireless_ds4.h` | Controller source, reader and status interfaces. |
+| `payload/pad_types.h` | Controller record layout. |
+| `payload/source_device_discovery.h` | Bounded device observation and ownership-aware refresh. |
+| `payload/game_process_watch.h` | Application lifetime observation. |
+| `payload/pad_feedback.h` | Feedback command and status layouts. |
+| `payload/reader_rumble_channel.h` | Source-side feedback transport and handle ownership. |
+| `payload/game_rumble_relay.h` | Per-controller feedback routing. |
+| `payload/trigger_effect_state.h` | Validated trigger requests and per-controller cached state. |
+| `payload/game_pad_bridge_status_main.c` | Finite diagnostic export. |
+| `payload/stop_game_pad_bridge_main.c` | Normal owned shutdown request. |
 
-Controller discovery scans all candidate users and pad indices. A live state
-sample alone is never treated as proof of DS4 identity: public VID/PID data,
-`scePadIsDS4Connected`, or the exact 11.60 identity table must confirm it.
+## Read path
 
-## Game admission
+The five read callbacks are `game_pad_read_state_stub`,
+`game_pad_read_state_ext_stub`, `game_pad_read_stub`, `game_pad_read_ext_stub`
+and `game_pad_get_data_internal_stub` in `wireless_ds4.c`.
 
-The supervisor accepts exactly one `eboot.bin` process whose `libScePad`, libc,
-and libkernel modules are ready. Before inspecting that process, it snapshots
-the RemotePlay reader and requires a ready, healthy, connected DS4. Reader
-loss blocks admission, cooperatively stops the old reader, invalidates its
-source identity, and completes rediscovery before the launch grace restarts.
-It then applies a 1.5-second launch grace and validates:
+A validated DS4 binding receives its real source packet. Known native DualSense
+bindings and unmatched handles use Sony's original path. A source binding does
+not grant another controller's data to an unrelated handle.
 
-- six required pad exports and bounded 256-byte fingerprints;
-- wrapper shapes, common internal targets, and executable mappings;
-- controller-information ABI evidence from the live source process;
-- the dynamically discovered client-table address and entry invariants;
-- one unambiguous global player handle;
-- each caller-owned PLT relocation and its current original destination;
-- a runtime-proven virtual-to-physical mapping path before direct writes.
+Queued reads report one new bridged sample per publication and zero when the
+publication repeats. An empty queued read retains the latest real packet in
+sample zero: consumers that examine connection state on an empty update must
+not see the disconnected game-local backing record. The zero return still
+prevents duplicate queued events. Read capacities outside 1–64 retain the
+original API path.
 
-Exact 8.60, 11.60, and 12.40 manifests provide additional evidence but do not supply
-the addresses used by the bridge. Unknown versions must pass the same
-structural checks.
+Source disconnection, expired leases, invalid arguments and native controllers
+have explicit regression controls. Input and controller metadata use the same
+source connection generation.
 
-## Game-side bridge
+## Installation and lifecycle
 
-The installer uses the existing kstuff remote-syscall facility to allocate and
-lock two 16 KiB pages in the game: one RX page for small pad gateways and one
-RW page for state. Only validated pad import slots are redirected. No game
-code page, Sony library code, heap allocation, thread, or socket is modified.
+`wireless_ds4_game_bridge_install` validates the selected application's pad
+library and controller ABI before redirecting its import slots. It handles
+both PLT and ordinary callable imports. The library's own text is unchanged.
+A bounded PS4 title classifier preserves native PS4 passthrough.
 
-The supervisor writes the inactive 120-byte frame, then atomically publishes
-its sequence, finite lease, active flag, and packet count. Each gateway either
-preserves a connected frame returned by the saved Sony function or uses a
-stable RemotePlay snapshot when the native backing path is disconnected or
-fails. Non-selected handles always use the original path. Controller metadata
-keeps plausible native geometry and deadzones; only missing values and the
-connected standard-controller compatibility fields are repaired.
+Copied code lives in `.text.ds4reader` and `.text.ds4gamebridge`. Keep these
+regions self-contained; their allocation, arguments and executable extents
+must match the target ABI. Review final machine code when changing copied
+callbacks or helpers.
 
-## Player selection
+Reader cleanup closes owned handles and retains borrowed handles. Application
+handoff and recovery use current process/source evidence. Status exports,
+normal stop requests and actual process disappearance are separate observations.
 
-Pad indices are local to a PS5 user and cannot identify global P1/P2 ordering.
-PoorDS4 therefore inspects the game's global table. It prefers one exact DS4
-entry, then one disconnected entry matching both the source user and local pad
-index, otherwise one unique disconnected entry, and finally one sole entry.
-The user/index pair disambiguates titles that preallocate multiple inactive
-slots without treating a local index as global. Multiple remaining candidates
-fail closed; a sole connected entry must also match the source identity so a
-native DualSense is never silently taken over.
+## Compatibility boundaries
 
-## Cleanup and recovery
+Fixes operate on shared API, source ownership and lifecycle contracts. No
+individual game title is selected for special input behavior. Firmware-specific
+layout checks remain necessary; see [firmware support](FIRMWARE_SUPPORT.md).
 
-Normal cleanup first disables publication, proves every import still points to
-either PoorDS4's gateway or its saved Sony function, restores imports in
-reverse order, waits for in-flight calls, and unmaps the anonymous allocation.
-
-Suspend cleanup restores imports without ptrace, target syscalls, or unmapping.
-The game discards the unreachable allocation when it exits. If the supervisor
-is terminated abruptly, the next injection accepts a stale bridge only after
-all gateways resolve to one valid bridge ABI v1 argument block with matching owners.
-
-The product contains no game-ptrace fallback. Unknown layouts are abandoned
-rather than attached to, because live testing proved that even a brief
-write-free game attach can poison some titles' startup state.
+Runtime simulation is a development aid. Host models and synthetic channels do
+not establish physical multiplayer, radio hot-plug or rumble delivery.
+See [testing](TESTING.md) for the validation matrix.

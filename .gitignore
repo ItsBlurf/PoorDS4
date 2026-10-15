@@ -2,4 +2,11 @@
 *.sprx
 /build/
 /logs/
+__pycache__/
+*.pyc
+*.o
+*.a
+.env
+.env.*
+.deps/
 
