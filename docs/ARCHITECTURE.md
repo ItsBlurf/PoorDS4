@@ -23,6 +23,7 @@ flowchart LR
 | `payload/wireless_ds4.c` | Source discovery, ABI validation, import installation, copied readers and game callbacks. |
 | `payload/wireless_ds4.h` | Controller source, reader and status interfaces. |
 | `payload/pad_types.h` | Controller record layout. |
+| `payload/version.h` | Release version used by runtime diagnostics. |
 | `payload/source_device_discovery.h` | Bounded device observation and ownership-aware refresh. |
 | `payload/game_process_watch.h` | Application lifetime observation. |
 | `payload/pad_feedback.h` | Feedback command and status layouts. |

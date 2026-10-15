@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — RC51 compatibility update
+## v0.2.0 — Unreleased
 
 ### Fixed
 

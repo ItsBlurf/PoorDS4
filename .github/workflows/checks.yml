@@ -46,8 +46,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for elf in payload/PoorDS4rc51-recovery.elf payload/PoorDS4-status.elf payload/PoorDS4-stop.elf; do
+          for elf in payload/PoorDS4.elf payload/PoorDS4-status.elf payload/PoorDS4-stop.elf; do
             python3 tools/check_elf.py "$elf"
           done
-          python3 tools/check_copied_code.py payload/PoorDS4rc51-recovery.elf --kind reader --output "$RUNNER_TEMP/reader.json"
-          python3 tools/check_copied_code.py payload/PoorDS4rc51-recovery.elf --kind game --output "$RUNNER_TEMP/game.json"
+          python3 tools/check_copied_code.py payload/PoorDS4.elf --kind reader --output "$RUNNER_TEMP/reader.json"
+          python3 tools/check_copied_code.py payload/PoorDS4.elf --kind game --output "$RUNNER_TEMP/game.json"

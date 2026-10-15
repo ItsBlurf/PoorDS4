@@ -27,6 +27,8 @@ make -C payload release
 
 The release target removes debug information from all three payloads.
 Outputs are written to `payload/` and ignored by Git.
+The main payload is `PoorDS4.elf`; its runtime reports identify the release
+version declared in `payload/version.h` (currently **0.2.0**).
 
 ## Native Windows
 

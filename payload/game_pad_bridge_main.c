@@ -49,9 +49,6 @@ extern int sceKernelGetAppInfo(pid_t pid, app_info_t *info);
 #ifndef POORDS4_AUTO_WATCH
 #define POORDS4_AUTO_WATCH 0
 #endif
-#ifndef POORDS4_RC_VERSION
-#define POORDS4_RC_VERSION 0
-#endif
 
 static time_t g_last_supervisor_write;
 static int g_supervisor_lock_fd = -1;
@@ -428,7 +425,7 @@ write_supervisor_state(const char *state, pid_t game_pid,
     char report[1024];
     int length = snprintf(
         report, sizeof(report),
-        "pid=%d\nheartbeat_epoch=%lld\nrc_version=%d\n"
+        "pid=%d\nheartbeat_epoch=%lld\nversion=%s\n"
         "auto_watch=%d\nstate=%s\n"
         "game_pid=%d\nsessions=%u\noutput_frames=%llu\n"
         "reader_pid=%d\nreader_args=0x%lx\n"
@@ -450,7 +447,7 @@ write_supervisor_state(const char *state, pid_t game_pid,
         "lifecycle_status_poll_result=0x%08x\n"
         "lifecycle_status_pattern=0x%016llx\n"
         "lifecycle_status_shutdown=%u\n",
-        getpid(), (long long)now, POORDS4_RC_VERSION,
+        getpid(), (long long)now, POORDS4_VERSION,
         POORDS4_AUTO_WATCH,
         state ? state : "unknown", game_pid, sessions, output_frames,
         g_reader_pid, (unsigned long)g_reader_args,
@@ -2016,8 +2013,8 @@ main(void)
     }
 
     poords4_log_reset();
-    poords4_log("[PoorDS4] build=rc51-recovery-20261015r30-api-guards "
-                "imports=plt+nonplt transport=rc51 ps4=native trigger-state=neutral-compat rumble=game-relay\n");
+    poords4_log("[PoorDS4] version=" POORDS4_VERSION " build=20261015r30-api-guards "
+                "imports=plt+nonplt transport=source-reader ps4=native trigger-state=neutral-compat rumble=game-relay\n");
     (void)unlink(GAME_BRIDGE_STOP_FILE);
     (void)unlink(GAME_BRIDGE_RESET_FILE);
     install_shutdown_signal_handlers();
@@ -2027,8 +2024,8 @@ main(void)
     write_supervisor_state("starting", -1, 0, 0, 1);
     (void)sceUserServiceInitialize(NULL);
     poords4_log(
-        "[PoorDS4] game bridge start rc=%d auto_watch=%d\n",
-        POORDS4_RC_VERSION, POORDS4_AUTO_WATCH);
+        "[PoorDS4] game bridge start version=%s auto_watch=%d\n",
+        POORDS4_VERSION, POORDS4_AUTO_WATCH);
     game_bridge_notify(
         "PoorDS4: wireless DS4 bridge injected; starting reader");
 

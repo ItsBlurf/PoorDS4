@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 #include "pad_feedback.h"
+#include "version.h"
 
 #define POORDS4_MAX_USER_CANDIDATES 6u
 /* Positive PS4 title identification: leave its controller path native. */

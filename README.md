@@ -14,11 +14,12 @@ changes. Native DualSense controllers keep their own input path.
 ## Getting started
 
 1. Connect the DS4 to the PS5 and select the profile used by the game.
-2. Load `PoorDS4rc51-recovery.elf` through the console's ELF loader.
+2. Load `PoorDS4.elf` through the console's ELF loader.
 3. Start a native PS5 game or homebrew application. The payload attaches automatically.
 
 Use the filename supplied with a published release when installing that release.
-The current source is an unreleased compatibility update based on RC51.
+The current source targets **v0.2.0**, an unreleased compatibility update
+incorporating the controller repairs made since RC51.
 See [what changed](CHANGELOG.md) and the [firmware requirements](docs/FIRMWARE_SUPPORT.md).
 
 ## Features
@@ -38,7 +39,7 @@ orders and secondary-controller rumble still need field testing.
 
 | File | Purpose |
 | --- | --- |
-| `PoorDS4rc51-recovery.elf` | Start the background controller bridge. |
+| `PoorDS4.elf` | Start the background controller bridge. |
 | `PoorDS4-status.elf` | Export current reader, bridge and controller diagnostics. |
 | `PoorDS4-stop.elf` | Request normal shutdown of the running bridge. |
 

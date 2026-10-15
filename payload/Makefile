@@ -1,8 +1,6 @@
 PS5_HOST ?=
 PORT     ?= 9021
-RC_VERSION := 51
-
-TARGET        := PoorDS4rc51-recovery.elf
+TARGET        := PoorDS4.elf
 EXP_TARGET    := PoorDS4exp.elf
 STATUS_TARGET := PoorDS4-status.elf
 STOP_TARGET   := PoorDS4-stop.elf
@@ -36,7 +34,7 @@ all: $(TARGET)
 
 $(TARGET): game_pad_bridge_main.c wireless_ds4.c $(COMMON_HEADERS)
 	$(CC) $(CFLAGS) -DPOORDS4_AUTO_WATCH=1 \
-		-DPOORDS4_RC_VERSION=$(RC_VERSION) -o $@ \
+		-o $@ \
 		game_pad_bridge_main.c wireless_ds4.c $(LDFLAGS) $(BRIDGE_LIBS)
 
 $(EXP_TARGET): $(TARGET)
@@ -64,7 +62,7 @@ else
 endif
 
 clean:
-	rm -f PoorDS4rc*.elf $(STATUS_TARGET) $(STOP_TARGET)
+	rm -f $(TARGET) $(EXP_TARGET) $(STATUS_TARGET) $(STOP_TARGET)
 
 deploy: $(TARGET)
 ifndef PS5_HOST
