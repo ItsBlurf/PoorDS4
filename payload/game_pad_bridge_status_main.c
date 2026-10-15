@@ -344,6 +344,13 @@ main(void)
         "client_native_rejects=%llu\nclient_missing=%llu\n",
         bridge.client_binding_available, (unsigned long long)bridge.client_bindings,
         (unsigned long long)bridge.client_native_rejects, (unsigned long long)bridge.client_missing);
+    fprintf(f,"consumer_samples=%llu\nconsumer_disconnected=%llu\n"
+        "consumer_output=0x%lx\nconsumer_handle=0x%08x\nconsumer_result=%d\n"
+        "consumer_connected=%u\nconsumer_count=%u\n",
+        (unsigned long long)bridge.consumer_samples,
+        (unsigned long long)bridge.consumer_disconnected,
+        (unsigned long)bridge.consumer_output, (unsigned)bridge.consumer_handle,
+        bridge.consumer_result, bridge.consumer_connected, bridge.consumer_count);
     fprintf(f,"vibration_available=%u\nvibration_calls=%llu\nvibration_mode_calls=%llu\n"
         "vibration_publications=%llu\nvibration_native_calls=%llu\nvibration_failures=%llu\n"
         "vibration_last_caller=0x%08x\nvibration_native_result=0x%08x\nvibration_last_mode=%d\n",

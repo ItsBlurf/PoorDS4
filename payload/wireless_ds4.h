@@ -41,6 +41,7 @@ int wireless_ds4_remote_reader_read_game_slot(pid_t pid, intptr_t args_address,
  * installed bridge; other results request its existing normal reinstall path. */
 int wireless_ds4_game_bridge_rebind_readers(pid_t pid, intptr_t args_address,
                                            const PoorDS4PadSource *source);
+int wireless_ds4_game_bridge_ack_reset(pid_t pid, intptr_t args_address);
 
 /* Physical reader output. Native acknowledgment is separate from UDP
  * acceptance. The current supervisor alone owns the connected sender socket. */
@@ -267,6 +268,10 @@ typedef struct {
     int32_t device_class_last_slot, device_class_last_value;
     uint32_t client_binding_available;
     uint64_t client_bindings, client_native_rejects, client_missing;
+    uint64_t consumer_samples, consumer_disconnected;
+    intptr_t consumer_output;
+    int32_t consumer_handle, consumer_result;
+    uint32_t consumer_connected, consumer_count;
 } PoorDS4GameBridgeStatus;
 
 int wireless_ds4_game_bridge_status(pid_t game_pid, intptr_t args_address,

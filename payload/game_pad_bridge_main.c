@@ -637,6 +637,13 @@ game_session_end_reason_name(GameSessionEndReason reason)
 static uint32_t
 collect_user_candidates(int32_t user_ids[POORDS4_MAX_USER_CANDIDATES]);
 
+static int
+game_session_recovers_reader(GameSessionEndReason reason)
+{
+    return reason==SESSION_END_READER_FAILED || reason==SESSION_END_RESET_REQUESTED ||
+        reason==SESSION_END_SOURCE_USERS_ADDED || reason==SESSION_END_SOURCE_DEVICE_ADDED;
+}
+
 static int32_t g_source_candidate_users[POORDS4_MAX_USER_CANDIDATES];
 static uint32_t g_source_candidate_count;
 static int32_t g_pending_source_user = -1;
@@ -1678,7 +1685,7 @@ run_game_session(pid_t reader_pid, intptr_t reader_args,
         }
     }
     int keep_bridge_for_reader_recovery =
-        end_reason == SESSION_END_READER_FAILED &&
+        game_session_recovers_reader(end_reason) &&
         !final_image_state && !g_shutdown_requested && !g_skip_remote_cleanup &&
         process_alive(game_pid);
     /* Exec destroyed the old game mapping. Do not neutralize or restore old
@@ -1687,13 +1694,26 @@ run_game_session(pid_t reader_pid, intptr_t reader_args,
     poords4_log("[PoorDS4] GAME RUMBLE cleanup=%d requests=%llu sent=%llu native_ack=%llu errors=%llu\n",
         rumble_cleanup,(unsigned long long)rumble->requests,(unsigned long long)rumble->submissions,
         (unsigned long long)rumble->acknowledgments,(unsigned long long)rumble->errors);
-    if(rumble_cleanup==-1)end_reason=SESSION_END_CLEANUP_FAILED;
+    if(rumble_cleanup==-1) {
+        end_reason=SESSION_END_CLEANUP_FAILED;
+        keep_bridge_for_reader_recovery=0;
+    }
     int remove_result = 0;
     if (keep_bridge_for_reader_recovery) {
         ScePadData neutral;
         make_neutral_connected_pad(&neutral);
-        (void)wireless_ds4_game_bridge_update(
-            game_pid, bridge_args, &neutral, sizeof(neutral));
+        if(wireless_ds4_game_bridge_update(
+                game_pid, bridge_args, &neutral, sizeof(neutral))) {
+            end_reason=SESSION_END_WRITER_FAILED;
+            keep_bridge_for_reader_recovery=0;
+        } else if(end_reason==SESSION_END_RESET_REQUESTED &&
+           wireless_ds4_game_bridge_ack_reset(game_pid,bridge_args)) {
+            poords4_log("[PoorDS4] reset acknowledgment failed; using verified cleanup\n");
+            end_reason=SESSION_END_CLEANUP_FAILED;
+            keep_bridge_for_reader_recovery=0;
+        }
+    }
+    if (keep_bridge_for_reader_recovery) {
         poords4_log(
             "[PoorDS4] game bridge retained for in-place reader "
             "recovery pid=%d\n", game_pid);
@@ -1902,7 +1922,6 @@ recover_wireless_reader_in_place(
     unsigned sessions, unsigned long long output_frames)
 {
     int32_t old_user_id = source ? source->user_id : -1;
-    int32_t old_pad_index = source ? source->pad_index : -1;
     uint64_t last_attempt_ms = 0;
     uint64_t last_status_ms = 0;
     unsigned attempts = 0;
@@ -1941,6 +1960,14 @@ recover_wireless_reader_in_place(
             int32_t users[POORDS4_MAX_USER_CANDIDATES];
             memset(users, 0xff, sizeof(users));
             uint32_t user_count = collect_user_candidates(users);
+            /* A newly foregrounded native or secondary user must not replace
+             * the still-connected primary simply by changing discovery order. */
+            for(uint32_t u=1;u<user_count;u++)if(users[u]==old_user_id) {
+                int32_t retained=users[u];
+                memmove(users+1,users,(size_t)u*sizeof(users[0]));
+                users[0]=retained;
+                break;
+            }
             PoorDS4PadSource candidate = {-1, -1, -1, 0};
             pid_t candidate_pid = -1;
             intptr_t candidate_args = 0;
@@ -1949,9 +1976,7 @@ recover_wireless_reader_in_place(
                     users, user_count, &candidate,
                     &candidate_pid, &candidate_args) == 0) {
                 record_source_user_candidates(users, user_count);
-                int user_changed = (old_user_id >= 0 &&
-                    (candidate.user_id != old_user_id ||
-                     candidate.pad_index != old_pad_index));
+                int user_changed = old_user_id >= 0 && candidate.user_id != old_user_id;
                 *source = candidate;
                 *reader_pid = candidate_pid;
                 *reader_args = candidate_args;
@@ -2013,7 +2038,7 @@ main(void)
     }
 
     poords4_log_reset();
-    poords4_log("[PoorDS4] version=" POORDS4_VERSION " build=20261015r33-live-client-bindings "
+    poords4_log("[PoorDS4] version=" POORDS4_VERSION " build=20261015r35-refresh-continuity "
                 "imports=plt+nonplt transport=source-reader ps4=native trigger-state=neutral-compat rumble=game-relay\n");
     (void)unlink(GAME_BRIDGE_STOP_FILE);
     (void)unlink(GAME_BRIDGE_RESET_FILE);
@@ -2403,7 +2428,7 @@ main(void)
             if (total_output_frames > 0)
                 exit_code = 0;
 
-            if (end_reason != SESSION_END_READER_FAILED ||
+            if (!game_session_recovers_reader(end_reason) ||
                 lifecycle_should_stop() || !process_alive(game_pid))
                 break;
 

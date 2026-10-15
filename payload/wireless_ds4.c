@@ -977,6 +977,12 @@ typedef struct {
     int32_t client_users[POORDS4_MAX_SLOTS];
     uint32_t client_primary_slot, client_reserved;
     volatile uint64_t client_bindings, client_native_rejects, client_missing;
+    /* Observe the packet returned to the consumer, rather than treating an
+     * advancing publication counter as proof that the game received it. */
+    volatile uint64_t consumer_samples, consumer_disconnected;
+    volatile intptr_t consumer_output;
+    volatile int32_t consumer_handle, consumer_result;
+    volatile uint32_t consumer_connected, consumer_count;
 } GamePadBridgeTriggerArgs;
 _Static_assert(offsetof(GamePadBridgeTriggerArgs,magic)==5968,
                "Trigger extension changed the original input prefix");
@@ -1403,6 +1409,19 @@ game_bridge_record_event(GamePadBridgeArgs *args, uint8_t stub_kind,
     uint8_t flags = base_flags;
     if (pad_data && return_val >= 0) {
         const ScePadData *pad = (const ScePadData *)pad_data;
+        if (args->slots[0].reserved[2] == POORDS4_CLIENT_BINDING_MAGIC) {
+            GamePadBridgeTriggerArgs *extension = (void *)args;
+            if (extension->client_binding_magic == POORDS4_CLIENT_BINDING_MAGIC) {
+                __atomic_store_n(&extension->consumer_output, (intptr_t)pad_data, __ATOMIC_RELAXED);
+                __atomic_store_n(&extension->consumer_handle, handle, __ATOMIC_RELAXED);
+                __atomic_store_n(&extension->consumer_result, return_val, __ATOMIC_RELAXED);
+                __atomic_store_n(&extension->consumer_connected, pad->connected, __ATOMIC_RELAXED);
+                __atomic_store_n(&extension->consumer_count, pad->count, __ATOMIC_RELAXED);
+                (void)__atomic_fetch_add(&extension->consumer_samples, 1, __ATOMIC_RELAXED);
+                if (!pad->connected)
+                    (void)__atomic_fetch_add(&extension->consumer_disconnected, 1, __ATOMIC_RELAXED);
+            }
+        }
         evt->timestamp_ms = (uint32_t)(pad->timestamp / 1000ull);
         evt->buttons = pad->buttons;
         evt->lx = pad->leftStick.x;
@@ -6096,7 +6115,7 @@ wireless_ds4_game_bridge_rebind_readers(pid_t pid, intptr_t args_address,
         pid!=g_game_bridge_direct_pid || args_address!=g_game_bridge_direct_args ||
         game_bridge_copy_args(pid,args_address,&args) ||
         args.magic!=POORDS4_GAME_BRIDGE_MAGIC ||
-        args.reserved1!=POORDS4_GAME_BRIDGE_LAYOUT_V1 || !args.direct_active) {
+        args.reserved1!=POORDS4_GAME_BRIDGE_LAYOUT_V1) {
         poords4_log("[PoorDS4] READER ROUTE reinstall reason=owner-or-prefix\n");
         return 1;
     }
@@ -6111,6 +6130,50 @@ wireless_ds4_game_bridge_rebind_readers(pid_t pid, intptr_t args_address,
     if (base<=0 || read_state<=0 || read_state!=args.fp_state_internal) {
         poords4_log("[PoorDS4] READER ROUTE reinstall reason=read-state-export\n");return 1;
     }
+    if (args.slots[0].reserved[2] == POORDS4_CLIENT_BINDING_MAGIC) {
+        GamePadBridgeTriggerArgs extension;
+        const size_t offset=offsetof(GamePadBridgeTriggerArgs,client_binding_magic);
+        if(remote_reader_copyout(pid,args_address+(intptr_t)offset,
+                (uint8_t *)&extension+offset,sizeof(extension)-offset) ||
+           extension.client_binding_magic!=POORDS4_CLIENT_BINDING_MAGIC ||
+           extension.client_primary_slot>=POORDS4_MAX_SLOTS ||
+           extension.client_users[extension.client_primary_slot]!=source->user_id ||
+           !args.slots[extension.client_primary_slot].active)
+            return 1;
+        int32_t users[POORDS4_MAX_SLOTS];
+        unsigned primary=extension.client_primary_slot;
+        for(unsigned slot=0;slot<POORDS4_MAX_SLOTS;slot++)users[slot]=-1;
+        users[primary]=source->user_id;
+        /* Keep existing physical users at their logical endpoints. A Sony
+         * native client joining is not a reason to remove any game hook. */
+        for(unsigned slot=0;slot<POORDS4_MAX_SLOTS;slot++) {
+            if(slot==primary)continue;
+            int32_t user=extension.client_users[slot];
+            unsigned owners=0;int reader=-1;
+            for(unsigned r=1;r<POORDS4_MAX_SLOTS;r++)
+                if(user>=0 && g_reader_users[r]==user){owners++;reader=(int)r;}
+            if(user!=source->user_id && owners==1){users[slot]=user;g_game_reader_slots[slot]=reader;}
+        }
+        for(unsigned r=1;r<POORDS4_MAX_SLOTS;r++) {
+            int32_t user=g_reader_users[r];unsigned owners=0;int assigned=0;
+            for(unsigned other=0;other<POORDS4_MAX_SLOTS;other++)owners+=user>=0 && g_reader_users[other]==user;
+            for(unsigned slot=0;slot<POORDS4_MAX_SLOTS;slot++)assigned|=users[slot]==user;
+            if(user<0 || owners!=1 || assigned)continue;
+            for(unsigned slot=0;slot<POORDS4_MAX_SLOTS;slot++)if(users[slot]<0) {
+                users[slot]=user;g_game_reader_slots[slot]=(int)r;break;
+            }
+        }
+        for(unsigned slot=0;slot<POORDS4_MAX_SLOTS;slot++) {
+            if(users[slot]==extension.client_users[slot])continue;
+            if(wireless_ds4_game_bridge_deactivate_slot(pid,args_address,slot) ||
+               game_bridge_process_write(pid,args_address+(intptr_t)offsetof(GamePadBridgeTriggerArgs,client_users)+
+                    (intptr_t)slot*sizeof(int32_t),&users[slot],sizeof(users[slot])))
+                return 1;
+        }
+        poords4_log("[PoorDS4] READER ROUTE refreshed live users primary=%u hooks=retained\n",primary);
+        return 0;
+    }
+    if(!args.direct_active)return 1;
     int32_t handle=-1,index=-1,handles[POORDS4_MAX_SLOTS];
     uint32_t native[POORDS4_MAX_SLOTS],matches[POORDS4_MAX_SLOTS];
     int result=game_bridge_select_pad_handle(pid,base,read_state,
@@ -7187,6 +7250,7 @@ wireless_ds4_game_bridge_status(pid_t game_pid, intptr_t args_kaddr,
     GamePadBridgeArgs args;
     memset(&args, 0, sizeof(args));
     int stable_snapshot = 0;
+    int primary_slot = -1;
     for (unsigned attempt = 0; attempt < 3; ++attempt) {
         uint32_t seq_after = 0;
         if (game_bridge_copy_args(
@@ -7195,13 +7259,22 @@ wireless_ds4_game_bridge_status(pid_t game_pid, intptr_t args_kaddr,
         if (args.magic != POORDS4_GAME_BRIDGE_MAGIC ||
             args.reserved1 != POORDS4_GAME_BRIDGE_LAYOUT_V1)
             return -1;
-        intptr_t seq_address = args_kaddr +
-            (intptr_t)offsetof(GamePadBridgeArgs, direct_seq);
+        primary_slot=-1;
+        for(unsigned slot=0;slot<POORDS4_MAX_SLOTS;slot++)
+            if((args.pad_handle>0 && args.slots[slot].pad_handle==args.pad_handle) ||
+               (args.slots[slot].reserved[0] && !args.slots[slot].is_dualsense)) {
+                primary_slot=(int)slot;break;
+            }
+        int slot_publication=primary_slot>=0 && args.slots[primary_slot].direct_packets!=0;
+        intptr_t seq_address = args_kaddr + (slot_publication
+            ? (intptr_t)offsetof(GamePadBridgeArgs,slots)+(intptr_t)primary_slot*sizeof(GamePadBridgeSlot)+
+                (intptr_t)offsetof(GamePadBridgeSlot,direct_seq)
+            : (intptr_t)offsetof(GamePadBridgeArgs,direct_seq));
         if (remote_reader_copyout(
                 game_pid, seq_address,
                 &seq_after, sizeof(seq_after)) != 0)
             return -1;
-        if (args.direct_seq == seq_after) {
+        if ((slot_publication?args.slots[primary_slot].direct_seq:args.direct_seq) == seq_after) {
             stable_snapshot = 1;
             break;
         }
@@ -7212,7 +7285,10 @@ wireless_ds4_game_bridge_status(pid_t game_pid, intptr_t args_kaddr,
         args.remote_block <= 0 || args.remote_block_size == 0)
         return -1;
     ScePadData pad;
-    memcpy(&pad, args.direct_pad_data[args.direct_seq & 1u],
+    int slot_publication=primary_slot>=0 && args.slots[primary_slot].direct_packets!=0;
+    memcpy(&pad, slot_publication
+           ? args.slots[primary_slot].direct_pad_data[args.slots[primary_slot].direct_seq&1u]
+           : args.direct_pad_data[args.direct_seq & 1u],
            sizeof(pad));
     int has_trigger_import=0;
     int has_device_class_import=0;
@@ -7239,6 +7315,13 @@ wireless_ds4_game_bridge_status(pid_t game_pid, intptr_t args_kaddr,
             out_status->client_bindings = extension.client_bindings;
             out_status->client_native_rejects = extension.client_native_rejects;
             out_status->client_missing = extension.client_missing;
+            out_status->consumer_samples = extension.consumer_samples;
+            out_status->consumer_disconnected = extension.consumer_disconnected;
+            out_status->consumer_output = extension.consumer_output;
+            out_status->consumer_handle = extension.consumer_handle;
+            out_status->consumer_result = extension.consumer_result;
+            out_status->consumer_connected = extension.consumer_connected;
+            out_status->consumer_count = extension.consumer_count;
         }
     }
     if(has_trigger_import && mapping_end>=mapping_start && argument>=mapping_start &&
@@ -7321,11 +7404,11 @@ wireless_ds4_game_bridge_status(pid_t game_pid, intptr_t args_kaddr,
             out_status->vibration_last_mode=output.last_mode;
         }
     }
-    out_status->active = args.direct_active;
-    out_status->seq = args.direct_seq;
+    out_status->active = slot_publication ? args.slots[primary_slot].active : args.direct_active;
+    out_status->seq = slot_publication ? args.slots[primary_slot].direct_seq : args.direct_seq;
     out_status->pad_handle = args.pad_handle;
     out_status->bridge_ready = 1;
-    out_status->published_packets = args.direct_packets;
+    out_status->published_packets = slot_publication ? args.slots[primary_slot].direct_packets : args.direct_packets;
     out_status->lease_expirations = args.lease_expirations;
     out_status->read_state_calls = args.read_state_calls;
     out_status->read_state_ext_calls = args.read_state_ext_calls;
@@ -7364,13 +7447,7 @@ wireless_ds4_game_bridge_status(pid_t game_pid, intptr_t args_kaddr,
      * Higher client indexes can occupy slot zero in the existing initializer. */
     /* This is a supervisor-local snapshot: never dereference its remote table
      * pointer through a copied game callback helper. */
-    out_status->game_pad_index = -1;
-    for (unsigned slot = 0; slot < POORDS4_MAX_SLOTS; ++slot)
-        if ((args.pad_handle > 0 && args.slots[slot].pad_handle == args.pad_handle) ||
-            (args.slots[slot].reserved[0] && !args.slots[slot].is_dualsense)) {
-            out_status->game_pad_index = (int32_t)slot;
-            break;
-        }
+    out_status->game_pad_index = primary_slot;
     out_status->buttons = pad.buttons;
     out_status->connected = pad.connected;
     out_status->reset_combo_ticks = args.reset_combo_ticks;
@@ -7441,6 +7518,27 @@ wireless_ds4_game_bridge_check_reset(pid_t game_pid, intptr_t args_address)
         return reset_val != 0 ? 1 : 0;
     }
     return -1;
+#endif
+}
+
+int
+wireless_ds4_game_bridge_ack_reset(pid_t game_pid, intptr_t args_address)
+{
+#if !defined(__PROSPERO__)
+    (void)game_pid;(void)args_address;return -1;
+#else
+    GamePadBridgeArgs args;
+    if(game_pid!=g_game_bridge_direct_pid || args_address!=g_game_bridge_direct_args ||
+       wireless_ds4_game_bridge_image_state(game_pid)!=0 ||
+       game_bridge_copy_args(game_pid,args_address,&args) ||
+       args.magic!=POORDS4_GAME_BRIDGE_MAGIC ||
+       args.reserved1!=POORDS4_GAME_BRIDGE_LAYOUT_V1)return -1;
+    const uint32_t zero=0;
+    const uint8_t ticks[POORDS4_MAX_SLOTS]={0};
+    if(game_bridge_process_write(game_pid,args_address+(intptr_t)offsetof(GamePadBridgeArgs,reset_requested),&zero,sizeof zero) ||
+       game_bridge_process_write(game_pid,args_address+(intptr_t)offsetof(GamePadBridgeArgs,reset_combo_ticks),&zero,sizeof zero) ||
+       game_bridge_process_write(game_pid,args_address+(intptr_t)offsetof(GamePadBridgeArgs,reset_ticks),ticks,sizeof ticks))return -1;
+    return 0;
 #endif
 }
 

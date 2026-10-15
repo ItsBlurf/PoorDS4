@@ -332,6 +332,8 @@ static int live_open_information_routes(void){
   }
   CHECK(full_game.client_bindings==(uint64_t)readers*2);
   CHECK(full_game.client_native_rejects>=(uint64_t)readers);
+  CHECK(full_game.consumer_samples>0 && full_game.consumer_disconnected==0);
+  CHECK(full_game.consumer_connected==1 && full_game.consumer_result>=0);
   /* Duplicate handles of one user cannot manufacture an extra player. */
   int primary_handle=0x07000708,duplicate=0x08000704;
   live_client(4,stride,g_reader_users[0],duplicate,0);

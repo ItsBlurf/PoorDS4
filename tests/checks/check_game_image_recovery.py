@@ -27,7 +27,7 @@ session = function(main, 'run_game_session')
 # Keep actual initialization, pre-IO loop admission, and entire actual final
 # cleanup. The omitted middle publishes normal input; those callbacks already
 # have independent tests. This test targets a pending exec before first IO.
-session = session[:session.index('        ScePadData pad;')] + '        break;\n    }\n' + session[session.index('    if (g_shutdown_requested && end_reason'):]
+session = session[:session.index('        ScePadData pad;')] + '        end_reason=requested_reason; break;\n    }\n' + session[session.index('    if (g_shutdown_requested && end_reason'):]
 marker = '        if (end_reason == SESSION_END_GAME_IMAGE_CHANGED && process_alive(game_pid)) {'
 reacquire = ''
 if marker in main:
@@ -93,6 +93,8 @@ static uint32_t g_game_bridge_direct_seq,g_game_bridge_direct_packets;
 static uint64_t g_game_bridge_direct_cr3,g_game_bridge_direct_dmap;
 static int paging_calls,physical_reads,physical_writes,remove_calls,quiesce_calls,update_calls,rumble_close_calls,copy_fail,seq_fail;
 static GamePadBridgeArgs fixture;
+static GameSessionEndReason requested_reason;
+static int ack_calls,ack_fail,update_fail;
 static PoorDS4PadSource g_pad_source={11,0,44,1};
 static intptr_t g_bridge_args;
 static int g_shutdown_requested,g_skip_remote_cleanup;
@@ -108,10 +110,13 @@ static int kernel_copyout(intptr_t from,void *to,size_t size){(void)from;physica
 static int game_bridge_copy_args(pid_t pid,intptr_t address,GamePadBridgeArgs *out){
  (void)pid;(void)address;if(copy_fail)return -1;*out=fixture;return 0;}
 static int remote_reader_copyout(pid_t pid,intptr_t address,void *out,size_t size){
- (void)pid;(void)address;if(seq_fail)return -1;memset(out,0,size);if(size==sizeof(uint32_t))memcpy(out,(const void*)&fixture.direct_seq,size);return 0;}
+ (void)pid;if(seq_fail)return -1;memset(out,0,size);
+ if(address>=0x2000 && (size_t)(address-0x2000)<=sizeof fixture && size<=sizeof fixture-(size_t)(address-0x2000))
+  memcpy(out,(const uint8_t*)&fixture+(address-0x2000),size);return 0;}
 int wireless_ds4_game_bridge_remove(pid_t pid,intptr_t address){(void)pid;(void)address;remove_calls++;return 0;}
 int wireless_ds4_game_bridge_quiesce(pid_t pid,intptr_t address){(void)pid;(void)address;quiesce_calls++;return 0;}
-int wireless_ds4_game_bridge_update(pid_t pid,intptr_t address,const void *pad,uint32_t size){(void)pid;(void)address;(void)pad;(void)size;update_calls++;return 0;}
+int wireless_ds4_game_bridge_update(pid_t pid,intptr_t address,const void *pad,uint32_t size){(void)pid;(void)address;(void)pad;(void)size;update_calls++;return update_fail?-1:0;}
+int wireless_ds4_game_bridge_ack_reset(pid_t pid,intptr_t address){(void)pid;(void)address;ack_calls++;return ack_fail?-1:0;}
 static int lifecycle_should_stop(void){return 0;}
 static int sleep_interruptible(unsigned usec){(void)usec;sleep_calls++;return 0;}
 static uint64_t monotonic_milliseconds(void){return 1000;}
@@ -140,6 +145,7 @@ program += 'static int '+function(source,'game_bridge_find_slot')
 program += 'int '+function(source,'wireless_ds4_game_bridge_status')
 program += 'static int '+function(main,'teardown_game_bridge')
 program += 'static const char *'+function(main,'game_session_end_reason_name')
+program += 'static int '+function(main,'game_session_recovers_reader')
 if '\ngame_rumble_routes_open(' in main:
     for name in ('game_rumble_routes_open','game_rumble_routes_tick','game_rumble_routes_close'):
         program+=('static int ' if name.endswith('close') else 'static void ')+function(main,name)
@@ -151,6 +157,7 @@ static void setup(void){
  paging_calls=physical_reads=physical_writes=remove_calls=quiesce_calls=update_calls=rumble_close_calls=copy_fail=seq_fail=0;
  g_game_bridge_direct_pid=-1;g_game_bridge_direct_args=0;g_game_bridge_direct_cr3=g_game_bridge_direct_dmap=0;
  memset(&fixture,0,sizeof fixture);fixture.magic=POORDS4_GAME_BRIDGE_MAGIC;fixture.reserved1=POORDS4_GAME_BRIDGE_LAYOUT_V1;
+ requested_reason=SESSION_END_STOP_REQUESTED;ack_calls=ack_fail=update_fail=0;
  fixture.pad_size=POORDS4_GAME_BRIDGE_PAD_SIZE;fixture.remote_block=0x2000;fixture.remote_block_size=0x4000;
  fixture.direct_active=1;fixture.direct_packets=65;fixture.read_state_calls=17;fixture.reserved0=2;
  fixture.pad_handle=0x03200702;fixture.slots[2].pad_handle=fixture.pad_handle;fixture.slots[2].pad_index=2;fixture.slots[2].active=1;
@@ -193,12 +200,48 @@ static int exec_io_and_cleanup(void){
  CHECK(game_bridge_process_write(94,0x4000,&value,sizeof value)==0 && paging_calls==1 && physical_writes==1);
  return 0;
 }
+static int status_logical_publication(void){
+ for(unsigned primary=0;primary<4;primary++){
+  setup();memset(fixture.slots,0,sizeof fixture.slots);
+  fixture.direct_active=fixture.direct_packets=fixture.direct_seq=0;
+  fixture.reserved0=8+primary;fixture.pad_handle=0x03000708+(int)primary;
+  fixture.slots[0].reserved[2]=POORDS4_CLIENT_BINDING_MAGIC;
+  fixture.slots[primary].pad_handle=fixture.pad_handle;
+  fixture.slots[primary].pad_index=(int32_t)fixture.reserved0;
+  fixture.slots[primary].active=1;fixture.slots[primary].direct_seq=4;
+  fixture.slots[primary].direct_packets=7;
+  ScePadData pad={0};pad.connected=1;pad.count=9;pad.buttons=0x4000+primary;
+  memcpy((void*)fixture.slots[primary].direct_pad_data[0],&pad,sizeof pad);
+  PoorDS4GameBridgeStatus status;
+  CHECK(wireless_ds4_game_bridge_status(94,0x2000,&status)==0);
+  CHECK(status.active==1 && status.seq==4 && status.published_packets==7);
+  CHECK(status.game_pad_index==(int)primary && status.connected==1 && status.buttons==pad.buttons);
+ }
+ return 0;
+}
 static int exec_session(void){
  setup();CHECK(poords4_game_process_watch_open(&g_game_process_watch,94)==0);pending_event=NOTE_EXEC;
  GameSessionEndReason reason=SESSION_END_STOP_REQUESTED;
  CHECK(run_game_session(63,0x1000,94,0x2000,1,0,&reason)==0);
  CHECK(!strcmp(game_session_end_reason_name(reason),"game_image_changed"));
  CHECK(!rumble_close_calls && !update_calls && !remove_calls && !quiesce_calls && close_calls==1);
+ return 0;
+}
+static int refresh_cleanup(void){
+ GameSessionEndReason reasons[]={SESSION_END_READER_FAILED,SESSION_END_RESET_REQUESTED,
+     SESSION_END_SOURCE_USERS_ADDED,SESSION_END_SOURCE_DEVICE_ADDED};
+ for(unsigned i=0;i<sizeof reasons/sizeof reasons[0];i++){
+  setup();requested_reason=reasons[i];GameSessionEndReason result;
+  CHECK(run_game_session(63,0x1000,94,0x2000,1,0,&result)==0 && result==reasons[i]);
+  CHECK(update_calls==1 && !remove_calls && !quiesce_calls);
+  CHECK(ack_calls==(reasons[i]==SESSION_END_RESET_REQUESTED));
+ }
+ setup();requested_reason=SESSION_END_RESET_REQUESTED;ack_fail=1;GameSessionEndReason result;
+ CHECK(run_game_session(63,0x1000,94,0x2000,1,0,&result)==0 && result==SESSION_END_CLEANUP_FAILED);
+ CHECK(remove_calls==1 && ack_calls==1);
+ setup();requested_reason=SESSION_END_RESET_REQUESTED;update_fail=1;
+ CHECK(run_game_session(63,0x1000,94,0x2000,1,0,&result)==0 && result==SESSION_END_WRITER_FAILED);
+ CHECK(remove_calls==1 && !ack_calls);
  return 0;
 }
 static int reacquire_decision(void){
@@ -229,7 +272,7 @@ static int watch_errors(void){
 }
 int main(void){
  int failed=0;
- failed+=status_failure();failed+=status_high_client_index();failed+=exec_io_and_cleanup();failed+=exec_session();failed+=reacquire_decision();failed+=watch_errors();
+ failed+=status_failure();failed+=status_high_client_index();failed+=status_logical_publication();failed+=exec_io_and_cleanup();failed+=exec_session();failed+=refresh_cleanup();failed+=reacquire_decision();failed+=watch_errors();
  printf("production status failure/logical primary for higher Sony indexes, exec IO/cache refusal, actual session cleanup and same-PID reacquisition, notification delivery/error contract: failed=%d\n",failed);
  return failed?1:0;
 }
