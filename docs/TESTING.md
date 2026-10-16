@@ -15,9 +15,7 @@ Sony API and memory/transport models. It covers:
 - Import/NID matching, ordinary relocations and SDK symbol extents.
 - Controller attribution, high client indexes and source-user ordering.
 - Anchored table discovery before clients open, first information queries,
-  recreated handles, same-user module aliases and native index reuse.
-- Independent queues across both read APIs and eight same-user aliases, including
-  high indexes, colliding low bits, reopened generations and source loss.
+  recreated handles, duplicate-user clients and native index reuse.
 - Four independent production reader feeds through queued and state acquisition,
   and distinct per-player packets through all five game input callbacks.
 - Source rediscovery, handle ownership, snapshot interleavings and image recovery.

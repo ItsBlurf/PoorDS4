@@ -334,11 +334,10 @@ static int live_open_information_routes(void){
   CHECK(full_game.client_native_rejects>=(uint64_t)readers);
   CHECK(full_game.consumer_samples>0 && full_game.consumer_disconnected==0);
   CHECK(full_game.consumer_connected==1 && full_game.consumer_result>=0);
-  /* Separate modules can open clients for the same physical user. Both
-   * aliases belong to one publication endpoint, not independent sources. */
+  /* Duplicate handles of one user cannot manufacture an extra player. */
   int primary_handle=0x07000708,duplicate=0x08000704;
   live_client(4,stride,g_reader_users[0],duplicate,0);
-  CHECK(game_bridge_find_slot(&game,primary_handle)==endpoint);
+  CHECK(game_bridge_find_slot(&game,primary_handle)==-1);
   CHECK(game_bridge_find_slot(&game,duplicate)==endpoint);
   live_client(4,stride,0,0,0);
   CHECK(game_bridge_find_slot(&game,primary_handle)==endpoint);
@@ -346,53 +345,6 @@ static int live_open_information_routes(void){
   uint32_t unknown=0x12345678,connected=1;
   memcpy(table_memory+8*stride+0x60,&unknown,4);memcpy(table_memory+8*stride+0x18,&connected,4);
   CHECK(game_bridge_find_slot(&game,primary_handle)==-1);
- }
- return 0;
-}
-static int same_user_module_aliases(void){
- for(unsigned profile=0;profile<2;profile++){
-  unsigned stride=profile?0x548:0x5c8;
-  memset(table_memory,0,sizeof table_memory);native_present=1;
-  g_reader_users[0]=11;g_reader_users[1]=22;g_reader_users[2]=g_reader_users[3]=-1;
-  int32_t h=-1,index=-1,handles[4]={-1,-1,-1,-1},users[4];uint32_t sony[4]={0},matches[4]={0};
-  int endpoint=game_bridge_prepare_client_bindings(11,&h,&index,handles,sony,matches,users);
-  CHECK(endpoint>=0);initialize(h,index,handles,sony,matches);
-  full_game.client_binding_magic=POORDS4_CLIENT_BINDING_MAGIC;full_game.client_table=(intptr_t)table_memory;
-  full_game.client_stride=stride;full_game.client_primary_slot=endpoint;
-  memcpy(full_game.client_users,users,sizeof users);game.slots[0].reserved[2]=POORDS4_CLIENT_BINDING_MAGIC;
-  /* Eight eligible aliases include colliding low three bits and high rows.
-   * A native DS5 for the same user must never become another DS4 alias. */
-  const unsigned rows[]={1,2,7,8,9,15,16,23};
-  for(unsigned a=0;a<8;a++)live_client(rows[a],stride,11,0x09000700|rows[a],0);
-  live_client(0,stride,11,0x09000700,1);
-  live_client(3,stride,99,0x09000703,0);
-  for(int kind=0;kind<5;kind++){
-   CHECK(wireless_ds4_game_bridge_update_slot(42,(intptr_t)&game,endpoint,&primary,sizeof primary,0,0)==0);
-   for(unsigned a=0;a<8;a++){
-    int handle=0x09000700|rows[a];unsigned char info[28];ScePadData out;
-    CHECK(game_bridge_find_slot(&game,handle)==endpoint);
-    CHECK(game_pad_get_controller_info_stub(handle,info,&game)==0 && info[12]==1);
-    CHECK(read(kind,handle,&out)==(kind==2 || kind==3?1:0));
-    CHECK(!memcmp(&out,&primary,sizeof out));
-    if(kind==2 || kind==3){CHECK(read(kind,handle,&out)==0 && !memcmp(&out,&primary,sizeof out));}
-   }
-   ScePadData out;
-   CHECK(read(kind,0x09000700,&out)>=0 && !memcmp(&out,&native,sizeof out));
-   CHECK(game_bridge_find_slot(&game,0x09000703)==-1);
-  }
-  /* Both queue APIs have independent cursors, as do reopened generations. */
-  CHECK(wireless_ds4_game_bridge_update_slot(42,(intptr_t)&game,endpoint,&primary,sizeof primary,0,0)==0);
-  ScePadData out;
-  CHECK(read(2,0x09000701,&out)==1 && read(3,0x09000701,&out)==1);
-  CHECK(read(2,0x09000701,&out)==0 && read(3,0x09000701,&out)==0);
-  live_client(1,stride,11,0x0a000701,0);
-  CHECK(read(2,0x09000701,&out)==0 && !out.connected);
-  CHECK(read(2,0x0a000701,&out)==1 && !memcmp(&out,&primary,sizeof out));
-  /* Source loss affects every alias without borrowing the second user's feed. */
-  CHECK(wireless_ds4_game_bridge_deactivate_slot(42,(intptr_t)&game,endpoint)==0);
-  /* Slot zero also has a legacy publication; model its source lease expiry. */
-  game.direct_lease=0;
-  for(unsigned a=1;a<8;a++)CHECK(read(0,0x09000700|rows[a],&out)==0 && !out.connected);
  }
  return 0;
 }
@@ -410,7 +362,6 @@ int main(void){
 #endif
  failed+=full_table_source_orders();
  failed+=live_open_information_routes();
- failed+=same_user_module_aliases();
  printf("production locator/selection/init/status/publications/five input callbacks and open-information routing; native DS5 bytes preserved; four independent DS4 feeds, cold joins and handle recreation modeled; failed=%d\n",failed);
  return failed!=0;
 }

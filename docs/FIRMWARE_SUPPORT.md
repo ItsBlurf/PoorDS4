@@ -26,9 +26,7 @@ layouts are reported rather than assumed compatible.
 Current console evidence includes the DS4 source reader, native application
 attachment, state and queued input, application changes between Eden, FC26 and
 LEGO Party, and LEGO Party's connection lifecycle on 11.60. Eden input has also
-been reported working on the recovery line. DS4 and DualSense gameplay together
-in Isaac Repentance has been reported working during this update's testing.
-This does not establish every join order or multiple physical DS4s. The regression
+been reported working on the recovery line. The regression
 suite checks shared read, metadata, ownership, discovery and trigger contracts
 with modeled Sony calls.
 

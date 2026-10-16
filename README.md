@@ -32,8 +32,7 @@ See [what changed](CHANGELOG.md) and the [firmware requirements](docs/FIRMWARE_S
 
 Controller routing, connection metadata, queued-read continuity and trigger
 compatibility have regression tests. Recent console checks cover the active
-DS4 reader, Eden, FC26 and LEGO Party's input paths. Mixed DS4/DualSense gameplay
-in Isaac Repentance has also been reported working. Broader gameplay, controller hot-plug
+DS4 reader, Eden, FC26 and LEGO Party's input paths. Broader gameplay, controller hot-plug
 orders and secondary-controller rumble still need field testing.
 
 ## Payloads
