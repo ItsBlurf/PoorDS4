@@ -46,3 +46,11 @@ and motor delivery require their own field evidence.
 
 Changes with those software/runtime checks complete can still need broader
 gameplay testing. Report that remaining scope alongside the test result.
+
+The current 11.60 release line has user-confirmed Eden input and Isaac
+Repentance gameplay with one DS4 and with a DS4 plus DualSense. A saved
+two-player Isaac run was also compared with the game's parser and live player
+assignments; its reconnect screen cleared after starting a new one-player run.
+That saved-session behavior is not evidence of a controller bridge regression.
+Several physical DS4s, additional join orders and wider firmware combinations
+remain separate field checks.

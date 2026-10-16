@@ -25,10 +25,11 @@ layouts are reported rather than assumed compatible.
 
 Current console evidence includes the DS4 source reader, native application
 attachment, state and queued input, application changes between Eden, FC26 and
-LEGO Party, and LEGO Party's connection lifecycle on 11.60. Eden input has also
-been reported working on the recovery line. The regression
-suite checks shared read, metadata, ownership, discovery and trigger contracts
-with modeled Sony calls.
+LEGO Party, and LEGO Party's connection lifecycle on 11.60. Eden input and
+Isaac Repentance gameplay with a DS4 alone or a DS4 and DualSense have been
+confirmed on that firmware. The regression suite checks shared read, metadata,
+ownership, discovery and trigger contracts with modeled Sony calls, including
+four independent source feeds. These controls are not physical four-DS4 tests.
 
 Multi-controller join orders, guest profiles, secondary rumble and wider
 firmware/game combinations need further field testing. Adaptive-trigger

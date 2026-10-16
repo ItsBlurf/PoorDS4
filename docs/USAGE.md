@@ -41,6 +41,15 @@ startup/status output to establish that it executed and attached.
 | Input stops after switching apps | Current game/source bindings and recovery state. |
 | Repeated disconnect notice | Connection state, queued-read results and metadata reacquisition counts. |
 
+### Continuing an Isaac co-op run
+
+Isaac Repentance remembers the players in a saved co-op run. Continuing that
+run with fewer controllers can show the game's reconnect screen even when the
+first DS4 is connected and working. Reconnect controllers for the existing
+players. A new one-player run can be used to check single-controller input,
+but starting it replaces the current run. Resetting PoorDS4 does not remove
+saved co-op players.
+
 ## Reporting a problem
 
 Include the firmware, payload version/build, game or homebrew version,
