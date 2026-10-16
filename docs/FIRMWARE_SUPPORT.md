@@ -32,10 +32,8 @@ ownership, discovery and trigger contracts with modeled Sony calls, including
 four independent source feeds. These controls are not physical four-DS4 tests.
 
 Multiplayer with several DS4s, guest profiles, additional connection orders and
-other firmware/game combinations need more testing. Rumble remains experimental:
-legacy vibration forwarding is implemented, but game-triggered physical rumble
-has not been confirmed. DualSense audio haptics and adaptive-trigger effects are
-not converted to DS4 feedback.
+other firmware/game combinations need more testing. DS4 vibration does not work
+in this build. DualSense haptic feedback and adaptive-trigger effects are not supported.
 
 For a useful compatibility report, include the exact firmware/build, title
 version, controller setup and fresh diagnostics. See [usage](USAGE.md) and

@@ -37,8 +37,8 @@ The regression suite passes on Windows and Linux. Eden input and Isaac
 Repentance gameplay with a DS4 alone or a DS4 and DualSense have been confirmed
 on 11.60. Continuing a saved co-op run still requires controllers for its
 existing players. Multiplayer with several DS4s, other firmware versions and
-additional connection orders need more testing. Rumble remains experimental;
-game-triggered physical vibration has not been confirmed.
+additional connection orders need more testing. DS4 vibration does not work in
+this build. DualSense haptic feedback and adaptive-trigger effects are not supported.
 See [testing](docs/TESTING.md) and
 [compatibility](docs/FIRMWARE_SUPPORT.md).
 

@@ -35,9 +35,8 @@ Linux. Eden input and Isaac Repentance gameplay with a single DS4 or a
 DS4 + DualSense have been confirmed on firmware 11.60. Multiplayer with several
 DS4s, other firmware versions and additional connection orders need more testing.
 
-Rumble remains experimental. Legacy vibration forwarding is implemented, but
-game-triggered physical rumble has not been confirmed. DualSense audio haptics
-and adaptive-trigger effects are not converted to DS4 feedback.
+DS4 vibration does not work in this build. DualSense haptic feedback and
+adaptive-trigger effects are not supported.
 
 ## Payloads
 
