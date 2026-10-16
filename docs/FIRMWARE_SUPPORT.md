@@ -31,9 +31,11 @@ confirmed on that firmware. The regression suite checks shared read, metadata,
 ownership, discovery and trigger contracts with modeled Sony calls, including
 four independent source feeds. These controls are not physical four-DS4 tests.
 
-Multi-controller join orders, guest profiles, secondary rumble and wider
-firmware/game combinations need further field testing. Adaptive-trigger
-compatibility state does not add adaptive actuators to a DS4.
+Multiplayer with several DS4s, guest profiles, additional connection orders and
+other firmware/game combinations need more testing. Rumble remains experimental:
+legacy vibration forwarding is implemented, but game-triggered physical rumble
+has not been confirmed. DualSense audio haptics and adaptive-trigger effects are
+not converted to DS4 feedback.
 
 For a useful compatibility report, include the exact firmware/build, title
 version, controller setup and fresh diagnostics. See [usage](USAGE.md) and

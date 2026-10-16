@@ -33,11 +33,12 @@
 
 ### Validation
 
-Host contracts and native source/game paths have regression checks. Extended
-multiplayer, hot-plug orders, secondary rumble and wider gameplay combinations
-still need field testing. Eden input and Isaac Repentance gameplay with a DS4
-alone or a DS4 and DualSense have been confirmed on 11.60. Continuing a saved
-co-op run still requires controllers for its existing players.
+The regression suite passes on Windows and Linux. Eden input and Isaac
+Repentance gameplay with a DS4 alone or a DS4 and DualSense have been confirmed
+on 11.60. Continuing a saved co-op run still requires controllers for its
+existing players. Multiplayer with several DS4s, other firmware versions and
+additional connection orders need more testing. Rumble remains experimental;
+game-triggered physical vibration has not been confirmed.
 See [testing](docs/TESTING.md) and
 [compatibility](docs/FIRMWARE_SUPPORT.md).
 

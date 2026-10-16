@@ -30,12 +30,14 @@ See [what changed](CHANGELOG.md) and the [firmware requirements](docs/FIRMWARE_S
 - Automatic application handoff and source rediscovery.
 - Separate status and stop payloads for diagnostics and normal shutdown.
 
-Controller routing, connection metadata, queued-read continuity and trigger
-compatibility have regression tests. Recent console checks cover the active
-DS4 reader, Eden, FC26 and LEGO Party's input paths. DS4-only and mixed DS4 +
-DualSense gameplay have also been confirmed in Isaac Repentance on 11.60.
-Additional physical DS4s, controller hot-plug orders and secondary-controller
-rumble still need field testing.
+Tests for controller routing, queued reads and recovery pass on Windows and
+Linux. Eden input and Isaac Repentance gameplay with a single DS4 or a
+DS4 + DualSense have been confirmed on firmware 11.60. Multiplayer with several
+DS4s, other firmware versions and additional connection orders need more testing.
+
+Rumble remains experimental. Legacy vibration forwarding is implemented, but
+game-triggered physical rumble has not been confirmed. DualSense audio haptics
+and adaptive-trigger effects are not converted to DS4 feedback.
 
 ## Payloads
 
