@@ -46,11 +46,15 @@ not grant another controller's data to an unrelated handle.
 Publication endpoints belong to independently observed DS4 users. During a
 game's controller-information or read call, the callback resolves the exact
 Sony handle against the live client table and its user identity. Native
-DualSense identity takes precedence over a cached index. Duplicate clients of
-one user do not receive additional copies of that user's physical feed.
+DualSense identity takes precedence over a cached index. Multiple game modules
+may open handles for the same user; these aliases resolve to one existing
+physical endpoint. They do not allocate another source or receive a different
+user's input.
 
 Queued reads report one new bridged sample per publication and zero when the
-publication repeats. An empty queued read retains the latest real packet in
+publication repeats. Each live client handle and queued API has its own cursor,
+keyed by the full handle generation, so one module cannot drain another's
+samples. An empty queued read retains the latest real packet in
 sample zero: consumers that examine connection state on an empty update must
 not see the disconnected game-local backing record. The zero return still
 prevents duplicate queued events. Read capacities outside 1–64 retain the

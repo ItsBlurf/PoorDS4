@@ -4,8 +4,10 @@
 
 - Bind newly opened game clients to their independently observed DS4 user before
   the game's first controller-information check, including multiplayer joins.
-- Preserve native controller identity when handles or player indexes change;
-  reject duplicate clients that would copy one physical feed to another player.
+- Preserve native controller identity when handles or player indexes change,
+  keeping independently observed controller users separate.
+- Preserve same-user handles opened by separate game modules, with independent
+  queued-read cursors for each client and API.
 - Locate the controller table from Sony's handle lookup and retain recovery
   routing for higher client indexes.
 

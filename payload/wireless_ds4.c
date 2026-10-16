@@ -984,6 +984,10 @@ typedef struct {
     volatile intptr_t consumer_output;
     volatile int32_t consumer_handle, consumer_result;
     volatile uint32_t consumer_connected, consumer_count;
+    /* One queued-read cursor per Sony client and API. Aliases of a physical
+     * user share its publication, but must not drain another module's queue.
+     * The upper word keys each cursor by the complete handle generation. */
+    volatile uint64_t client_read_cursors[2][24];
 } GamePadBridgeTriggerArgs;
 _Static_assert(offsetof(GamePadBridgeTriggerArgs,magic)==5968,
                "Trigger extension changed the original input prefix");
@@ -1061,22 +1065,9 @@ game_bridge_find_slot(GamePadBridgeArgs *args, int32_t handle)
                 owner = (int)slot;
             }
             if (owner < 0) return -1;
-            /* A user may have duplicate game-local clients. Only its first
-             * eligible client represents the independently acquired feed. */
-            for (unsigned other = 0; other < 24u; ++other) {
-                const volatile uint8_t *candidate = (const volatile uint8_t *)(uintptr_t)
-                    (extension->client_table + (intptr_t)other * stride);
-                int32_t other_handle = *(const volatile int32_t *)(candidate + 0x1c);
-                if (other_handle <= 0 || (other_handle & 0xff) >= (handle & 0xff) ||
-                    *(const volatile int32_t *)(candidate + 0x24) != user) continue;
-                int32_t other_connected = *(const volatile int32_t *)(candidate + 0x18);
-                uint32_t other_device = *(const volatile uint32_t *)(candidate + 0x60);
-                int other_ds4 = other_device == UINT32_C(0x05c4054c) || other_device == UINT32_C(0x09cc054c) ||
-                    other_device == UINT32_C(0x0ba0054c) || other_device == UINT32_C(0x0000054c);
-                if (other_device != UINT32_C(0x0ce6054c) && other_device != UINT32_C(0x0df2054c) &&
-                    (other_connected == 0 || (other_connected == 1 && other_ds4)))
-                    return -1;
-            }
+            /* Multiple modules may open clients for one user. Resolve every
+             * validated alias to that user's existing physical endpoint;
+             * never allocate another feed or borrow an unrelated user's data. */
             if (__atomic_load_n(&args->slots[owner].pad_handle, __ATOMIC_RELAXED) != handle) {
                 __atomic_store_n(&args->slots[owner].pad_index, handle & 0xff, __ATOMIC_RELAXED);
                 __atomic_store_n(&args->slots[owner].pad_handle, handle, __ATOMIC_RELEASE);
@@ -1160,6 +1151,18 @@ game_bridge_direct_available_slot(GamePadBridgeArgs *args, unsigned slot)
     if (__atomic_exchange_n(&args->slots[slot].active, 0, __ATOMIC_ACQ_REL) != 0)
         (void)__atomic_fetch_add(&args->lease_expirations, 1, __ATOMIC_RELAXED);
     return 0;
+}
+
+static __attribute__((always_inline)) inline volatile uint64_t *
+game_bridge_client_read_cursor(GamePadBridgeArgs *args, int32_t handle, unsigned api)
+{
+    if (args->slots[0].reserved[2] != POORDS4_CLIENT_BINDING_MAGIC ||
+        (handle & 0xff) >= 24 || api >= 2)
+        return NULL;
+    GamePadBridgeTriggerArgs *extension = (GamePadBridgeTriggerArgs *)args;
+    if (extension->client_binding_magic != POORDS4_CLIENT_BINDING_MAGIC)
+        return NULL;
+    return &extension->client_read_cursors[api][handle & 0xff];
 }
 
 static __attribute__((always_inline, unused)) inline int
@@ -1765,6 +1768,12 @@ game_pad_read_stub(int32_t handle, void *out, int32_t num,
             uint32_t last_seq = (slot == 0 && args->slots[0].direct_packets == 0)
                 ? read_seq_table[handle & 7u]
                 : args->slots[slot].last_read_seq;
+            volatile uint64_t *client_cursor = game_bridge_client_read_cursor(args, handle, 0);
+            uint64_t cursor_before = client_cursor
+                ? __atomic_load_n(client_cursor, __ATOMIC_RELAXED) : 0;
+            if (client_cursor)
+                last_seq = (uint32_t)(cursor_before >> 32) == (uint32_t)handle
+                    ? (uint32_t)cursor_before : 0;
             if (current_seq == 0 || current_seq == last_seq) {
                 /* Sony can overwrite out with its disconnected backing record
                  * before the queue says there is no new bridged sample. Unity
@@ -1788,6 +1797,12 @@ game_pad_read_stub(int32_t handle, void *out, int32_t num,
                     args->slots[slot].last_read_seq = current_seq;
                     final_result = 1;
                     direct_copied = 1;
+                    if (client_cursor && !__atomic_compare_exchange_n(client_cursor,
+                            &cursor_before, ((uint64_t)(uint32_t)handle << 32) | current_seq,
+                            0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+                        final_result = 0;
+                        direct_copied = 0;
+                    }
                 } else {
                     if (native_connected) {
                         (void)__atomic_fetch_add(
@@ -1927,6 +1942,12 @@ game_pad_read_ext_stub(int32_t handle, void *out, int32_t num,
             uint32_t last_seq = (slot == 0 && args->slots[0].direct_packets == 0)
                 ? read_ext_seq_table[handle & 7u]
                 : args->slots[slot].last_read_seq;
+            volatile uint64_t *client_cursor = game_bridge_client_read_cursor(args, handle, 1);
+            uint64_t cursor_before = client_cursor
+                ? __atomic_load_n(client_cursor, __ATOMIC_RELAXED) : 0;
+            if (client_cursor)
+                last_seq = (uint32_t)(cursor_before >> 32) == (uint32_t)handle
+                    ? (uint32_t)cursor_before : 0;
             if (current_seq == 0 || current_seq == last_seq) {
                 /* Preserve the real cached packet on empty queued reads; the
                  * return value remains zero, so no duplicate edge is emitted. */
@@ -1947,6 +1968,12 @@ game_pad_read_ext_stub(int32_t handle, void *out, int32_t num,
                     args->slots[slot].last_read_seq = current_seq;
                     final_result = 1;
                     direct_copied = 1;
+                    if (client_cursor && !__atomic_compare_exchange_n(client_cursor,
+                            &cursor_before, ((uint64_t)(uint32_t)handle << 32) | current_seq,
+                            0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+                        final_result = 0;
+                        direct_copied = 0;
+                    }
                 } else {
                     if (native_connected) {
                         (void)__atomic_fetch_add(
