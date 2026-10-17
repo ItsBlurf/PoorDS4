@@ -21,6 +21,9 @@ bridge recovery. The shortcut uses consecutive input samples, so its timing
 depends on the application's polling rate. Each logical controller has its own
 counter. Unknown handles and disconnected records cannot request recovery.
 
+In-game recovery can complete without a notification while keeping the existing
+controller assignments.
+
 ## Diagnostics
 
 Send `PoorDS4-status.elf` to export a bounded report. The status payload is

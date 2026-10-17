@@ -54,3 +54,7 @@ assignments; its reconnect screen cleared after starting a new one-player run.
 That saved-session behavior is not evidence of a controller bridge regression.
 Several physical DS4s, additional join orders and wider firmware combinations
 remain separate field checks.
+
+Mixed DS4/DualSense gameplay has also been checked with either controller as
+player one, reconnecting either device, and reopening a saved co-op run. Both
+players retained independent input. These checks used one DS4 and one DualSense.
