@@ -38,7 +38,10 @@ Repentance gameplay with a DS4 alone or a DS4 and DualSense have been confirmed
 on 11.60. Continuing a saved co-op run still requires controllers for its
 existing players. Multiplayer with several DS4s, other firmware versions and
 additional connection orders need more testing. DS4 vibration does not work in
-this build. DualSense haptic feedback and adaptive-trigger effects are not supported.
+this build. The DS4 also lacks the DualSense's haptic actuators and
+adaptive-trigger hardware, so those effects are not supported. Vibration
+support is a low priority for now, but ideas, technical findings and pull
+requests are welcome.
 See [testing](docs/TESTING.md) and
 [compatibility](docs/FIRMWARE_SUPPORT.md).
 

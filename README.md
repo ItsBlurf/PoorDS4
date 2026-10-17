@@ -35,8 +35,10 @@ Linux. Eden input and Isaac Repentance gameplay with a single DS4 or a
 DS4 + DualSense have been confirmed on firmware 11.60. Multiplayer with several
 DS4s, other firmware versions and additional connection orders need more testing.
 
-DS4 vibration does not work in this build. DualSense haptic feedback and
-adaptive-trigger effects are not supported.
+DS4 vibration does not work in this build. The DS4 also lacks the DualSense's
+haptic actuators and adaptive-trigger hardware, so those effects are not
+supported. Vibration support is a low priority for now, but ideas, technical
+findings and pull requests are welcome.
 
 ## Payloads
 

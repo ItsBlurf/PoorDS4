@@ -33,7 +33,10 @@ four independent source feeds. These controls are not physical four-DS4 tests.
 
 Multiplayer with several DS4s, guest profiles, additional connection orders and
 other firmware/game combinations need more testing. DS4 vibration does not work
-in this build. DualSense haptic feedback and adaptive-trigger effects are not supported.
+in this build. The DS4 also lacks the DualSense's haptic actuators and
+adaptive-trigger hardware, so those effects are not supported. Vibration
+support is a low priority for now, but ideas, technical findings and pull
+requests are welcome.
 
 For a useful compatibility report, include the exact firmware/build, title
 version, controller setup and fresh diagnostics. See [usage](USAGE.md) and
