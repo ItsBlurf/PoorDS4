@@ -25,6 +25,8 @@ int wireless_ds4_remote_reader_read_slot(pid_t pid, intptr_t args_address,
                                         void *pad_data, uint32_t pad_data_len,
                                         uint32_t *out_seq);
 int wireless_ds4_remote_reader_stop(pid_t pid, intptr_t args_address);
+/* The reader slot (1..3) of the secondary DS4 signed in as user_id, or -1. */
+int wireless_ds4_remote_reader_slot_for_user(int32_t user_id);
 
 typedef struct {
     int32_t ready;
@@ -133,6 +135,7 @@ typedef struct {
     uint8_t  connected;
     uint8_t  user_matches;
     uint8_t  reserved[2];
+    int32_t  user_id;
 } PoorDS4SlotStatus;
 
 typedef struct {

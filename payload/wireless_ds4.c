@@ -913,6 +913,8 @@ _Static_assert(sizeof(GamePadBridgeArgs) == 5968,
                "GamePadBridgeArgs ABI changed");
 
 static pid_t g_game_bridge_direct_pid = -1;
+/* The PS5 user of each DS4 the RemotePlay reader polls, by reader slot. */
+static int32_t g_reader_slot_users[POORDS4_MAX_SLOTS] = {-1, -1, -1, -1};
 static intptr_t g_game_bridge_direct_args = 0;
 static uint32_t g_game_bridge_direct_seq = 0;
 static uint32_t g_game_bridge_direct_packets = 0;
@@ -2800,6 +2802,7 @@ wireless_ds4_remote_reader_start(
     unsigned ds4_count = 0;
     int32_t multi_handles[POORDS4_MAX_SLOTS] = {-1, -1, -1, -1};
     int multi_opened[POORDS4_MAX_SLOTS] = {0, 0, 0, 0};
+    int32_t multi_users[POORDS4_MAX_SLOTS] = {-1, -1, -1, -1};
     for (uint32_t user_slot = 0; user_slot < user_count; ++user_slot) {
         int32_t candidate_user = user_ids[user_slot];
         if (candidate_user < 0)
@@ -2961,6 +2964,7 @@ wireless_ds4_remote_reader_start(
                 if (ds4_count < POORDS4_MAX_SLOTS) {
                     multi_handles[ds4_count] = candidate_handle;
                     multi_opened[ds4_count] = opened_here;
+                    multi_users[ds4_count] = candidate_user;
                     if (ds4_count == 0) {
                         handle = candidate_handle;
                         selected_user = candidate_user;
@@ -3115,6 +3119,7 @@ wireless_ds4_remote_reader_start(
     args.owner_check_interval = 120;
     for (unsigned s = 0; s < POORDS4_MAX_SLOTS; ++s) {
         args.slot_handles[s] = (s < ds4_count) ? multi_handles[s] : -1;
+        g_reader_slot_users[s] = (s < ds4_count) ? multi_users[s] : -1;
         args.slot_seqs[s] = 0;
         args.slot_results[s] = -1;
         memset(args.slot_data[s], 0, sizeof(args.slot_data[s]));
@@ -3381,6 +3386,18 @@ wireless_ds4_remote_reader_status(
     out_status->reset_requested = (uint32_t)snapshot.reset_requested;
     return 0;
 #endif
+}
+
+int
+wireless_ds4_remote_reader_slot_for_user(int32_t user_id)
+{
+    if (user_id < 0)
+        return -1;
+    for (unsigned s = 1; s < POORDS4_MAX_SLOTS; ++s) {
+        if (g_reader_slot_users[s] == user_id)
+            return (int)s;
+    }
+    return -1;
 }
 
 int
@@ -4713,7 +4730,7 @@ game_bridge_select_pad_handle(
     int32_t source_user_id, int32_t source_pad_index, int report_fd,
     int32_t *out_handle, int32_t *out_index,
     int32_t *out_slot_handles, uint32_t *out_slot_dualsense,
-    uint32_t *out_slot_user_matches)
+    uint32_t *out_slot_user_matches, int32_t *out_slot_users)
 {
     if (target <= 0 || libpad_base <= 0 || read_state <= 0 ||
         source_user_id < 0 || source_pad_index < 0 ||
@@ -4730,6 +4747,8 @@ game_bridge_select_pad_handle(
                 out_slot_dualsense[s] = 0;
             if (out_slot_user_matches)
                 out_slot_user_matches[s] = 0;
+            if (out_slot_users)
+                out_slot_users[s] = -1;
         }
     }
     GameBridgeDynlibObjectPrefix object;
@@ -4873,6 +4892,8 @@ game_bridge_select_pad_handle(
                     out_slot_dualsense[inferred_index] = is_active_dualsense ? 1u : 0u;
                 if (out_slot_user_matches)
                     out_slot_user_matches[inferred_index] = matches_user ? 1u : 0u;
+                if (out_slot_users)
+                    out_slot_users[inferred_index] = user_id;
             }
         }
 
@@ -5378,11 +5399,12 @@ wireless_ds4_game_bridge_run_passive(
     int32_t slot_handles[POORDS4_MAX_SLOTS] = {-1, -1, -1, -1};
     uint32_t slot_dualsense[POORDS4_MAX_SLOTS] = {0, 0, 0, 0};
     uint32_t slot_user_matches[POORDS4_MAX_SLOTS] = {0, 0, 0, 0};
+    int32_t slot_users[POORDS4_MAX_SLOTS] = {-1, -1, -1, -1};
     if (game_bridge_select_pad_handle(
             target, base, originals[0], source->user_id,
             source->pad_index,
             report_fd, &game_pad_handle, &game_pad_index,
-            slot_handles, slot_dualsense, slot_user_matches) != 0) {
+            slot_handles, slot_dualsense, slot_user_matches, slot_users) != 0) {
         report_printf(report_fd, "state=waiting_for_game_pad_handle\n");
         result = -4;
         goto done;
@@ -5515,11 +5537,13 @@ wireless_ds4_game_bridge_run_passive(
             args.slots[i].pad_index = (int32_t)i;
             args.slots[i].is_dualsense = slot_dualsense[i] ? 1u : 0u;
             args.slots[i].reserved[0] = slot_user_matches[i] ? 1u : 0u;
+            args.slots[i].reserved[1] = (uint32_t)slot_users[i];
         } else {
             args.slots[i].pad_handle = -1;
             args.slots[i].pad_index = -1;
             args.slots[i].is_dualsense = 0;
             args.slots[i].reserved[0] = 0;
+            args.slots[i].reserved[1] = UINT32_C(0xffffffff);
         }
         args.slots[i].active = 0;
         args.slots[i].is_simulated = 0;
@@ -5532,6 +5556,7 @@ wireless_ds4_game_bridge_run_passive(
     args.slots[ds4_slot].pad_index = (int32_t)game_pad_index;
     args.slots[ds4_slot].is_dualsense = 0;
     args.slots[ds4_slot].reserved[0] = 1u;
+    args.slots[ds4_slot].reserved[1] = (uint32_t)source->user_id;
     args.fp_state_internal = originals[0];
     args.fp_read_internal = originals[2];
     args.fp_data_internal = originals[4];
@@ -6025,6 +6050,7 @@ wireless_ds4_game_bridge_status(pid_t game_pid, intptr_t args_kaddr,
         out_status->slots[s].is_dualsense = args.slots[s].is_dualsense;
         out_status->slots[s].is_simulated = args.slots[s].is_simulated;
         out_status->slots[s].user_matches = (uint8_t)(args.slots[s].reserved[0] & 0xff);
+        out_status->slots[s].user_id = (int32_t)args.slots[s].reserved[1];
         out_status->slots[s].seq = args.slots[s].direct_seq;
         out_status->slots[s].packets = args.slots[s].direct_packets;
         out_status->slots[s].read_state_calls = args.slots[s].read_state_calls;

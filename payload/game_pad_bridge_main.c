@@ -1025,11 +1025,15 @@ feed_multi_controller_slots(pid_t reader_pid, intptr_t reader_args,
         } else {
             ScePadData physical_pad;
             uint32_t slot_seq = 0;
-            /* Reader slot 0 is the primary DS4, already published to
-             * primary_slot; only reader slots 1..3 are other DS4s. */
-            if (s != 0 && reader_pid > 0 && reader_args > 0 &&
+            /* Reader slots are numbered in discovery order, not by player:
+             * feed this slot from the secondary DS4 signed in as its user.
+             * Reader slot 0 is the primary DS4, already on primary_slot. */
+            int reader_slot = (bridge_status && bridge_status->slots[s].user_id >= 0)
+                ? wireless_ds4_remote_reader_slot_for_user(bridge_status->slots[s].user_id)
+                : -1;
+            if (reader_slot > 0 && reader_pid > 0 && reader_args > 0 &&
                 wireless_ds4_remote_reader_read_slot(
-                    reader_pid, reader_args, s,
+                    reader_pid, reader_args, (unsigned)reader_slot,
                     &physical_pad, sizeof(physical_pad), &slot_seq) == 0 &&
                 physical_pad.connected != 0) {
                 current_fed_mask |= (1 << s);
