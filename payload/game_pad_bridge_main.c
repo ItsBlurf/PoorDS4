@@ -1000,6 +1000,10 @@ feed_multi_controller_slots(pid_t reader_pid, intptr_t reader_args,
     for (unsigned s = 0; s < POORDS4_MAX_SLOTS; ++s) {
         if (s == primary_slot)
             continue;
+        /* A native DualSense slot keeps Sony's path. Publishing into it
+         * clears is_dualsense and hands that player another controller. */
+        if (bridge_status && bridge_status->slots[s].is_dualsense)
+            continue;
         if (g_sim_mask & (1 << s)) {
             current_fed_mask |= (1 << s);
             ScePadData sim_pad;
@@ -1021,7 +1025,9 @@ feed_multi_controller_slots(pid_t reader_pid, intptr_t reader_args,
         } else {
             ScePadData physical_pad;
             uint32_t slot_seq = 0;
-            if (reader_pid > 0 && reader_args > 0 &&
+            /* Reader slot 0 is the primary DS4, already published to
+             * primary_slot; only reader slots 1..3 are other DS4s. */
+            if (s != 0 && reader_pid > 0 && reader_args > 0 &&
                 wireless_ds4_remote_reader_read_slot(
                     reader_pid, reader_args, s,
                     &physical_pad, sizeof(physical_pad), &slot_seq) == 0 &&

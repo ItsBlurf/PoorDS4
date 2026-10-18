@@ -959,7 +959,12 @@ game_bridge_find_slot(GamePadBridgeArgs *args, int32_t handle)
         (args->slots[0].active || args->slots[0].is_simulated || args->slots[0].is_dualsense))
         return 0;
     if (handle_idx >= 0 && handle_idx < (int32_t)POORDS4_MAX_SLOTS) {
-        if (!args->slots[handle_idx].is_dualsense && !args->slots[handle_idx].is_simulated) {
+        /* An unrecorded handle is claimed only for the DS4's own global
+         * slot (a regenerated handle) or a same-user alias recorded at
+         * install. Any other handle, such as a native DualSense the table
+         * scan did not flag, stays on Sony's path. */
+        if (!args->slots[handle_idx].is_dualsense && !args->slots[handle_idx].is_simulated &&
+            (handle_idx == legacy_idx || args->slots[handle_idx].reserved[0])) {
             if (args->slots[handle_idx].pad_handle != handle) {
                 args->slots[handle_idx].pad_handle = handle;
                 args->slots[handle_idx].pad_index = handle_idx;
@@ -979,6 +984,24 @@ game_bridge_find_slot(GamePadBridgeArgs *args, int32_t handle)
     return -1;
 }
 
+/* The global feed carries the primary DS4 (the neutral frames published
+ * while the reader recovers). */
+static __attribute__((always_inline)) inline int
+game_bridge_direct_available_global(GamePadBridgeArgs *args)
+{
+    if (!__atomic_load_n(&args->direct_active, __ATOMIC_ACQUIRE))
+        return 0;
+    uint32_t lease = __atomic_load_n(&args->direct_lease, __ATOMIC_RELAXED);
+    while (lease != 0) {
+        if (__atomic_compare_exchange_n(&args->direct_lease, &lease, lease - 1u, 0,
+                                        __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+            return 1;
+    }
+    if (__atomic_exchange_n(&args->direct_active, 0, __ATOMIC_ACQ_REL) != 0)
+        (void)__atomic_fetch_add(&args->lease_expirations, 1, __ATOMIC_RELAXED);
+    return 0;
+}
+
 static __attribute__((always_inline)) inline int
 game_bridge_direct_available_slot(GamePadBridgeArgs *args, unsigned slot)
 {
@@ -994,17 +1017,13 @@ game_bridge_direct_available_slot(GamePadBridgeArgs *args, unsigned slot)
                     return 1;
             }
         }
-        if (!__atomic_load_n(&args->direct_active, __ATOMIC_ACQUIRE))
+        /* Slot 0 takes the primary DS4's global feed only when it is that
+         * DS4's slot or a same-user alias, not when it holds another user's
+         * controller (a DualSense P1 with the DS4 on P2). */
+        if (args->slots[0].pad_handle > 0 && args->reserved0 != 0u &&
+            !args->slots[0].reserved[0])
             return 0;
-        uint32_t lease = __atomic_load_n(&args->direct_lease, __ATOMIC_RELAXED);
-        while (lease != 0) {
-            if (__atomic_compare_exchange_n(&args->direct_lease, &lease, lease - 1u, 0,
-                                            __ATOMIC_RELAXED, __ATOMIC_RELAXED))
-                return 1;
-        }
-        if (__atomic_exchange_n(&args->direct_active, 0, __ATOMIC_ACQ_REL) != 0)
-            (void)__atomic_fetch_add(&args->lease_expirations, 1, __ATOMIC_RELAXED);
-        return 0;
+        return game_bridge_direct_available_global(args);
     }
     if (!__atomic_load_n(&args->slots[slot].active, __ATOMIC_ACQUIRE))
         return 0;
@@ -1018,7 +1037,7 @@ game_bridge_direct_available_slot(GamePadBridgeArgs *args, unsigned slot)
         (void)__atomic_fetch_add(&args->lease_expirations, 1, __ATOMIC_RELAXED);
     if (args->slots[slot].reserved[0] && !args->slots[slot].is_dualsense &&
         !args->slots[slot].is_simulated) {
-        return game_bridge_direct_available_slot(args, 0);
+        return game_bridge_direct_available_global(args);
     }
     return 0;
 }
@@ -1380,7 +1399,10 @@ game_pad_read_state_stub(int32_t handle, void *out,
             if (direct_active)
                 (void)__atomic_fetch_add(
                     &args->direct_active_fallbacks, 1, __ATOMIC_RELAXED);
-            if (game_bridge_copy_direct_slot(
+            /* A connected native frame is a real controller on this handle
+             * (a DualSense whose handle shares this slot); keep it. The DS4
+             * frame is only the fallback for a disconnected backing handle. */
+            if (!native_connected && game_bridge_copy_direct_slot(
                     args, (unsigned)slot, out, &args->read_state_calls,
                     &args->slots[slot].read_state_calls)) {
                 final_result = 0;
@@ -1502,7 +1524,10 @@ game_pad_read_state_ext_stub(int32_t handle, void *out,
             if (direct_active)
                 (void)__atomic_fetch_add(
                     &args->direct_active_fallbacks, 1, __ATOMIC_RELAXED);
-            if (game_bridge_copy_direct_slot(
+            /* A connected native frame is a real controller on this handle
+             * (a DualSense whose handle shares this slot); keep it. The DS4
+             * frame is only the fallback for a disconnected backing handle. */
+            if (!native_connected && game_bridge_copy_direct_slot(
                     args, (unsigned)slot, out, &args->read_state_ext_calls,
                     &args->slots[slot].read_state_ext_calls)) {
                 final_result = 0;
@@ -1620,7 +1645,17 @@ game_pad_read_stub(int32_t handle, void *out, int32_t num,
             uint32_t last_seq = (slot == 0 && args->slots[0].direct_packets == 0)
                 ? read_seq_table[handle & 7u]
                 : args->slots[slot].last_read_seq;
-            if (current_seq == 0 || current_seq == last_seq) {
+            if (native_connected) {
+                /* A connected native frame is a real controller on this
+                 * handle; return its samples rather than the DS4's. */
+                (void)__atomic_fetch_add(
+                    &args->native_passthrough_frames, 1, __ATOMIC_RELAXED);
+                (void)__atomic_fetch_add(
+                    &args->read_calls, 1, __ATOMIC_RELAXED);
+                (void)__atomic_fetch_add(
+                    &args->slots[slot].native_passthrough_frames, 1, __ATOMIC_RELAXED);
+                final_result = native_result;
+            } else if (current_seq == 0 || current_seq == last_seq) {
                 final_result = 0;
             } else {
                 if (game_bridge_copy_direct_slot(
@@ -1769,7 +1804,17 @@ game_pad_read_ext_stub(int32_t handle, void *out, int32_t num,
             uint32_t last_seq = (slot == 0 && args->slots[0].direct_packets == 0)
                 ? read_ext_seq_table[handle & 7u]
                 : args->slots[slot].last_read_seq;
-            if (current_seq == 0 || current_seq == last_seq) {
+            if (native_connected) {
+                /* A connected native frame is a real controller on this
+                 * handle; return its samples rather than the DS4's. */
+                (void)__atomic_fetch_add(
+                    &args->native_passthrough_frames, 1, __ATOMIC_RELAXED);
+                (void)__atomic_fetch_add(
+                    &args->read_ext_calls, 1, __ATOMIC_RELAXED);
+                (void)__atomic_fetch_add(
+                    &args->slots[slot].native_passthrough_frames, 1, __ATOMIC_RELAXED);
+                final_result = native_result;
+            } else if (current_seq == 0 || current_seq == last_seq) {
                 final_result = 0;
             } else {
                 if (game_bridge_copy_direct_slot(
@@ -1898,7 +1943,10 @@ game_pad_get_data_internal_stub(int32_t handle, void *out,
             if (direct_active)
                 (void)__atomic_fetch_add(
                     &args->direct_active_fallbacks, 1, __ATOMIC_RELAXED);
-            if (game_bridge_copy_direct_slot(
+            /* A connected native frame is a real controller on this handle
+             * (a DualSense whose handle shares this slot); keep it. The DS4
+             * frame is only the fallback for a disconnected backing handle. */
+            if (!native_connected && game_bridge_copy_direct_slot(
                     args, (unsigned)slot, out, &args->data_internal_calls,
                     &args->slots[slot].data_internal_calls)) {
                 final_result = 0;
