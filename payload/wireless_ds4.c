@@ -34,6 +34,9 @@
 #define POORDS4_RC_VERSION 0
 #endif
 #include "pad_types.h"
+#ifndef R_X86_64_GLOB_DAT
+#define R_X86_64_GLOB_DAT 6
+#endif
 
 #ifndef GC_FORCE_STRUCTURAL_FIRMWARE
 #define GC_FORCE_STRUCTURAL_FIRMWARE 0
@@ -956,7 +959,12 @@ game_bridge_find_slot(GamePadBridgeArgs *args, int32_t handle)
         (args->slots[0].active || args->slots[0].is_simulated || args->slots[0].is_dualsense))
         return 0;
     if (handle_idx >= 0 && handle_idx < (int32_t)POORDS4_MAX_SLOTS) {
-        if (!args->slots[handle_idx].is_dualsense && !args->slots[handle_idx].is_simulated) {
+        /* An unrecorded handle is claimed only for the DS4's own global
+         * slot (a regenerated handle) or a same-user alias recorded at
+         * install. Any other handle, such as a native DualSense the table
+         * scan did not flag, stays on Sony's path. */
+        if (!args->slots[handle_idx].is_dualsense && !args->slots[handle_idx].is_simulated &&
+            (handle_idx == legacy_idx || args->slots[handle_idx].reserved[0])) {
             if (args->slots[handle_idx].pad_handle != handle) {
                 args->slots[handle_idx].pad_handle = handle;
                 args->slots[handle_idx].pad_index = handle_idx;
@@ -976,6 +984,24 @@ game_bridge_find_slot(GamePadBridgeArgs *args, int32_t handle)
     return -1;
 }
 
+/* The global feed carries the primary DS4 (the neutral frames published
+ * while the reader recovers). */
+static __attribute__((always_inline)) inline int
+game_bridge_direct_available_global(GamePadBridgeArgs *args)
+{
+    if (!__atomic_load_n(&args->direct_active, __ATOMIC_ACQUIRE))
+        return 0;
+    uint32_t lease = __atomic_load_n(&args->direct_lease, __ATOMIC_RELAXED);
+    while (lease != 0) {
+        if (__atomic_compare_exchange_n(&args->direct_lease, &lease, lease - 1u, 0,
+                                        __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+            return 1;
+    }
+    if (__atomic_exchange_n(&args->direct_active, 0, __ATOMIC_ACQ_REL) != 0)
+        (void)__atomic_fetch_add(&args->lease_expirations, 1, __ATOMIC_RELAXED);
+    return 0;
+}
+
 static __attribute__((always_inline)) inline int
 game_bridge_direct_available_slot(GamePadBridgeArgs *args, unsigned slot)
 {
@@ -991,17 +1017,13 @@ game_bridge_direct_available_slot(GamePadBridgeArgs *args, unsigned slot)
                     return 1;
             }
         }
-        if (!__atomic_load_n(&args->direct_active, __ATOMIC_ACQUIRE))
+        /* Slot 0 takes the primary DS4's global feed only when it is that
+         * DS4's slot or a same-user alias, not when it holds another user's
+         * controller (a DualSense P1 with the DS4 on P2). */
+        if (args->slots[0].pad_handle > 0 && args->reserved0 != 0u &&
+            !args->slots[0].reserved[0])
             return 0;
-        uint32_t lease = __atomic_load_n(&args->direct_lease, __ATOMIC_RELAXED);
-        while (lease != 0) {
-            if (__atomic_compare_exchange_n(&args->direct_lease, &lease, lease - 1u, 0,
-                                            __ATOMIC_RELAXED, __ATOMIC_RELAXED))
-                return 1;
-        }
-        if (__atomic_exchange_n(&args->direct_active, 0, __ATOMIC_ACQ_REL) != 0)
-            (void)__atomic_fetch_add(&args->lease_expirations, 1, __ATOMIC_RELAXED);
-        return 0;
+        return game_bridge_direct_available_global(args);
     }
     if (!__atomic_load_n(&args->slots[slot].active, __ATOMIC_ACQUIRE))
         return 0;
@@ -1015,7 +1037,7 @@ game_bridge_direct_available_slot(GamePadBridgeArgs *args, unsigned slot)
         (void)__atomic_fetch_add(&args->lease_expirations, 1, __ATOMIC_RELAXED);
     if (args->slots[slot].reserved[0] && !args->slots[slot].is_dualsense &&
         !args->slots[slot].is_simulated) {
-        return game_bridge_direct_available_slot(args, 0);
+        return game_bridge_direct_available_global(args);
     }
     return 0;
 }
@@ -1377,7 +1399,10 @@ game_pad_read_state_stub(int32_t handle, void *out,
             if (direct_active)
                 (void)__atomic_fetch_add(
                     &args->direct_active_fallbacks, 1, __ATOMIC_RELAXED);
-            if (game_bridge_copy_direct_slot(
+            /* A connected native frame is a real controller on this handle
+             * (a DualSense whose handle shares this slot); keep it. The DS4
+             * frame is only the fallback for a disconnected backing handle. */
+            if (!native_connected && game_bridge_copy_direct_slot(
                     args, (unsigned)slot, out, &args->read_state_calls,
                     &args->slots[slot].read_state_calls)) {
                 final_result = 0;
@@ -1499,7 +1524,10 @@ game_pad_read_state_ext_stub(int32_t handle, void *out,
             if (direct_active)
                 (void)__atomic_fetch_add(
                     &args->direct_active_fallbacks, 1, __ATOMIC_RELAXED);
-            if (game_bridge_copy_direct_slot(
+            /* A connected native frame is a real controller on this handle
+             * (a DualSense whose handle shares this slot); keep it. The DS4
+             * frame is only the fallback for a disconnected backing handle. */
+            if (!native_connected && game_bridge_copy_direct_slot(
                     args, (unsigned)slot, out, &args->read_state_ext_calls,
                     &args->slots[slot].read_state_ext_calls)) {
                 final_result = 0;
@@ -1617,7 +1645,17 @@ game_pad_read_stub(int32_t handle, void *out, int32_t num,
             uint32_t last_seq = (slot == 0 && args->slots[0].direct_packets == 0)
                 ? read_seq_table[handle & 7u]
                 : args->slots[slot].last_read_seq;
-            if (current_seq == 0 || current_seq == last_seq) {
+            if (native_connected) {
+                /* A connected native frame is a real controller on this
+                 * handle; return its samples rather than the DS4's. */
+                (void)__atomic_fetch_add(
+                    &args->native_passthrough_frames, 1, __ATOMIC_RELAXED);
+                (void)__atomic_fetch_add(
+                    &args->read_calls, 1, __ATOMIC_RELAXED);
+                (void)__atomic_fetch_add(
+                    &args->slots[slot].native_passthrough_frames, 1, __ATOMIC_RELAXED);
+                final_result = native_result;
+            } else if (current_seq == 0 || current_seq == last_seq) {
                 final_result = 0;
             } else {
                 if (game_bridge_copy_direct_slot(
@@ -1766,7 +1804,17 @@ game_pad_read_ext_stub(int32_t handle, void *out, int32_t num,
             uint32_t last_seq = (slot == 0 && args->slots[0].direct_packets == 0)
                 ? read_ext_seq_table[handle & 7u]
                 : args->slots[slot].last_read_seq;
-            if (current_seq == 0 || current_seq == last_seq) {
+            if (native_connected) {
+                /* A connected native frame is a real controller on this
+                 * handle; return its samples rather than the DS4's. */
+                (void)__atomic_fetch_add(
+                    &args->native_passthrough_frames, 1, __ATOMIC_RELAXED);
+                (void)__atomic_fetch_add(
+                    &args->read_ext_calls, 1, __ATOMIC_RELAXED);
+                (void)__atomic_fetch_add(
+                    &args->slots[slot].native_passthrough_frames, 1, __ATOMIC_RELAXED);
+                final_result = native_result;
+            } else if (current_seq == 0 || current_seq == last_seq) {
                 final_result = 0;
             } else {
                 if (game_bridge_copy_direct_slot(
@@ -1895,7 +1943,10 @@ game_pad_get_data_internal_stub(int32_t handle, void *out,
             if (direct_active)
                 (void)__atomic_fetch_add(
                     &args->direct_active_fallbacks, 1, __ATOMIC_RELAXED);
-            if (game_bridge_copy_direct_slot(
+            /* A connected native frame is a real controller on this handle
+             * (a DualSense whose handle shares this slot); keep it. The DS4
+             * frame is only the fallback for a disconnected backing handle. */
+            if (!native_connected && game_bridge_copy_direct_slot(
                     args, (unsigned)slot, out, &args->data_internal_calls,
                     &args->slots[slot].data_internal_calls)) {
                 final_result = 0;
@@ -3726,6 +3777,8 @@ typedef struct {
     uint64_t strtab_size;
     uint64_t plt_rela;
     uint64_t plt_rela_size;
+    uint64_t rela;
+    uint64_t rela_size;
 } GameBridgeDynlibSectionPrefix;
 
 typedef struct {
@@ -3749,6 +3802,8 @@ _Static_assert(offsetof(GameBridgeDynlibSectionPrefix, symtab) == 0x28,
                "rtld symtab offset changed");
 _Static_assert(offsetof(GameBridgeDynlibSectionPrefix, plt_rela) == 0x48,
                "rtld PLT relocation offset changed");
+_Static_assert(offsetof(GameBridgeDynlibSectionPrefix, rela) == 0x58,
+               "rtld relocation offset changed");
 
 static int game_bridge_collect_import_hooks(
     pid_t target, intptr_t libpad_base, const intptr_t originals[7],
@@ -4025,6 +4080,7 @@ game_bridge_collect_import_hooks(
 
     unsigned object_count = 0;
     unsigned relocation_count = 0;
+    unsigned dyn_hooks = 0;
     while (object_address != 0 && object_count++ < 512u) {
         GameBridgeDynlibObjectPrefix object;
         memset(&object, 0, sizeof(object));
@@ -4074,23 +4130,49 @@ game_bridge_collect_import_hooks(
                 (unsigned long long)object.dynsec);
             return -1;
         }
-        if (!section.symtab || !section.strtab || !section.plt_rela ||
+        /* Caller-owned import slots live in two tables.  A Sony-SDK game
+         * binds them with R_X86_64_JUMP_SLOT in .rela.plt (DT_JMPREL); a
+         * -fno-plt build (the ps5-payload-sdk, e.g. homebrew apps) binds
+         * them with R_X86_64_GLOB_DAT in .rela.dyn (DT_RELA) and calls
+         * through the GOT directly.  Scan both.  In the general table only
+         * GLOB_DAT is a bound import, so every other type (RELATIVE, 64,
+         * ...) is filtered out before any value or slot is inspected. */
+        uint64_t plt_count = 0;
+        uint64_t dyn_count = 0;
+        if (section.plt_rela && section.plt_rela_size != 0 &&
+            section.plt_rela_size <= UINT64_C(0x02000000) &&
+            section.plt_rela_size % sizeof(Elf64_Rela) == 0)
+            plt_count = section.plt_rela_size / sizeof(Elf64_Rela);
+        if (section.rela && section.rela_size != 0 &&
+            section.rela_size <= UINT64_C(0x02000000) &&
+            section.rela_size % sizeof(Elf64_Rela) == 0)
+            dyn_count = section.rela_size / sizeof(Elf64_Rela);
+        if (!section.symtab || !section.strtab ||
             section.symtab_size == 0 || section.strtab_size == 0 ||
-            section.plt_rela_size == 0 ||
             section.symtab_size > UINT64_C(0x02000000) ||
             section.strtab_size > UINT64_C(0x02000000) ||
-            section.plt_rela_size > UINT64_C(0x02000000) ||
             section.symtab_size % sizeof(Elf64_Sym) != 0 ||
-            section.plt_rela_size % sizeof(Elf64_Rela) != 0)
+            (plt_count == 0 && dyn_count == 0))
             continue;
         uint64_t symbol_count = section.symtab_size / sizeof(Elf64_Sym);
-        uint64_t rela_count = section.plt_rela_size / sizeof(Elf64_Rela);
+        uint64_t rela_count = plt_count + dyn_count;
         relocation_count += rela_count > UINT_MAX
             ? UINT_MAX : (unsigned)rela_count;
+        /* Fall back to the general table only when the PLT scan found no
+         * pad import, so a Sony-SDK game keeps its exact verified path,
+         * cost, and read-failure surface. */
+        int want_dyn = plt_count == 0;
         for (uint64_t index = 0; index < rela_count; ++index) {
+            int dyn_table = index >= plt_count;
+            if (dyn_table && index == plt_count)
+                want_dyn = (*out_count == 0);
+            if (dyn_table && !want_dyn)
+                continue;
+            intptr_t table_base = (intptr_t)(
+                dyn_table ? section.rela : section.plt_rela);
             Elf64_Rela rela;
-            intptr_t rela_address = (intptr_t)(section.plt_rela +
-                index * sizeof(rela));
+            intptr_t rela_address = (intptr_t)(table_base +
+                (index - (dyn_table ? plt_count : 0)) * sizeof(rela));
             if (kernel_copyout(
                     rela_address, &rela, sizeof(rela)) != 0 &&
                 game_bridge_process_read(
@@ -4101,6 +4183,9 @@ game_bridge_collect_import_hooks(
                     object_count - 1u, (unsigned long long)index);
                 return -1;
             }
+            if (dyn_table &&
+                ELF64_R_TYPE(rela.r_info) != R_X86_64_GLOB_DAT)
+                continue;
             uint64_t symbol_index = ELF64_R_SYM(rela.r_info);
             if (symbol_index >= symbol_count)
                 continue;
@@ -4286,12 +4371,14 @@ game_bridge_collect_import_hooks(
                 (unsigned long)slot, kind, names[kind], protection,
                 (unsigned long long)current);
             (*out_count)++;
+            if (dyn_table)
+                dyn_hooks++;
         }
     }
     report_printf(
         report_fd,
-        "import_scan_objects=%u relocations=%u hooks=%u\n",
-        object_count, relocation_count, *out_count);
+        "import_scan_objects=%u relocations=%u hooks=%u dyn_hooks=%u\n",
+        object_count, relocation_count, *out_count, dyn_hooks);
     if (*out_count == 0) {
         game_bridge_dump_modules_report(target, libpad_base, NULL, 0);
         report_printf(report_fd, "import_scan_error=no_supported_hooks\n");
