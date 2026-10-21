@@ -32,11 +32,12 @@ See [what changed](CHANGELOG.md) and the [firmware requirements](docs/FIRMWARE_S
 
 Tests for controller routing, queued reads and recovery pass on Windows and
 Linux. Earlier builds in this release line confirmed Eden input and Isaac
-Repentance gameplay with a single DS4 or a
-DS4 + DualSense have been confirmed on firmware 11.60. Multiplayer with several
-DS4s, other firmware versions and additional connection orders need more testing.
-The latest controller-table correction passes captured-code checks on a PS5;
-gameplay in the affected Isaac setup still needs a retest.
+Repentance gameplay with a single DS4 or a DS4 + DualSense on firmware 11.60.
+Multiplayer with several DS4s, other firmware versions and additional connection
+orders need more testing.
+The latest controller-table correction passes captured-code checks on a PS5,
+and live Isaac reads receive connected DS4 input. Gameplay in the affected
+tester setup still needs a retest.
 
 DS4 vibration does not work in this build. The DS4 also lacks the DualSense's
 haptic actuators and adaptive-trigger hardware, so those effects are not

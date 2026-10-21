@@ -64,5 +64,6 @@ record strides, extended registers, native-first ordering, high client indexes,
 invalid records and ambiguous-table rejection. Captured failing instructions
 select the correct table in host and PS5 controls; the previous locator selects
 a synchronization record instead. The copied reader and game callbacks are
-unchanged from the earlier gameplay-tested build. Gameplay in the affected
-Isaac setup still needs a retest.
+unchanged from the earlier gameplay-tested build. Live Isaac reads also accept
+connected DS4 input on the console. Gameplay in the affected tester setup still
+needs a retest.

@@ -27,15 +27,17 @@ Current console evidence includes the DS4 source reader, native application
 attachment, state and queued input, application changes between Eden, FC26 and
 LEGO Party, and LEGO Party's connection lifecycle on 11.60. Eden input and
 Isaac Repentance gameplay with a DS4 alone or a DS4 and DualSense have been
-confirmed on earlier builds on that firmware. The regression suite checks shared read, metadata,
-ownership, discovery and trigger contracts with modeled Sony calls, including
+confirmed on earlier builds on that firmware. The regression suite checks shared
+read, metadata, ownership, discovery and trigger contracts with modeled Sony
+calls, including
 four independent source feeds. These controls are not physical four-DS4 tests.
 
 A later Isaac report exposed a longer handle-lookup loop that the table locator
 missed. The correction selects the proper table using the captured library code
-in host and PS5 controls. Source connection is also checked on the console;
-gameplay in that affected setup still needs a retest. Lookup recognition depends
-on the loaded library's instructions, rather than the firmware number alone.
+in host and PS5 controls. Live Isaac reads also receive connected DS4 packets on
+the console; gameplay in that affected tester setup still needs a retest. Lookup
+recognition depends on the loaded library's instructions, rather than the
+firmware number alone.
 
 Multiplayer with several DS4s, guest profiles, additional connection orders and
 other firmware/game combinations need more testing. DS4 vibration does not work
