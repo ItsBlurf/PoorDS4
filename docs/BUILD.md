@@ -15,6 +15,7 @@ the PS5 compiler and linker on Linux/WSL.
 
 ```sh
 export PS5_PAYLOAD_SDK=/absolute/path/to/ps5-payload-sdk
+export LLVM_CONFIG=/absolute/path/to/llvm-23.1.3/bin/llvm-config
 make -C payload
 make -C payload status stop
 ```
@@ -26,6 +27,8 @@ make -C payload release
 ```
 
 The release target removes debug information from all three payloads.
+Set `LLVM_CONFIG` explicitly when several LLVM versions are installed; the SDK
+can otherwise select an older version even when Clang 23 is on PATH.
 Outputs are written to `payload/` and ignored by Git.
 The main payload is `PoorDS4.elf`; its runtime reports identify the release
 version declared in `payload/version.h` (currently **0.2.0**).
