@@ -32,6 +32,19 @@ read-only with respect to controller input. Runtime files are under
 
 - `game-pad-bridge-supervisor.txt`: supervisor state and current process bindings.
 - `game-pad-bridge-status.txt`: reader, controller slots and game callbacks.
+- `game-pad-bridge-first-failure.txt`: the first failed installation report,
+  preserved across later attempts. Waiting for an application or controller is
+  not recorded as a failure. The report is limited to 64 KiB plus a completion
+  marker; the marker also indicates whether the original report was truncated.
+
+Normal logs remain enabled and rotate automatically. For additional per-controller
+summaries, create an empty regular file named `/data/poords4/verbose`. Remove it
+to return to normal detail. The setting is checked periodically while the bridge
+is active and does not require a restart. These summaries use cached status;
+they do not generate controller input or change controller assignments.
+
+After saving a first-failure report for a bug report, remove that file if you
+want the next installation failure captured. It is not overwritten automatically.
 
 A successful transfer means the loader received the file. Check the payload's
 startup/status output to establish that it executed and attached.

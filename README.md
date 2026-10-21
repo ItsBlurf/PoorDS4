@@ -29,6 +29,7 @@ See [what changed](CHANGELOG.md) and the [firmware requirements](docs/FIRMWARE_S
 - Per-controller source attribution and handle-generation recovery.
 - Automatic application handoff and source rediscovery.
 - Separate status and stop payloads for diagnostics and normal shutdown.
+- Preserved first-failure reports and optional detailed controller logs.
 
 Tests for controller routing, queued reads and recovery pass on Windows and
 Linux. Earlier builds in this release line confirmed Eden input and Isaac
@@ -38,6 +39,8 @@ orders need more testing.
 The latest controller-table correction passes captured-code checks on a PS5,
 and live Isaac reads receive connected DS4 input. Gameplay in the affected
 tester setup still needs a retest.
+The current build's input delivery, optional logging and normal recovery were
+also checked in Eden on 11.60.
 
 DS4 vibration does not work in this build. The DS4 also lacks the DualSense's
 haptic actuators and adaptive-trigger hardware, so those effects are not

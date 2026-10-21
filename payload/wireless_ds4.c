@@ -44,6 +44,8 @@
 #define POORDS4_DATA_DIR "/data/poords4"
 #endif
 
+#include "diagnostic_files.h"
+
 extern void poords4_log(const char *format, ...);
 #define klog_printf poords4_log
 #define POORDS4_REMOTE_PAD_CAPACITY 256u
@@ -6265,7 +6267,7 @@ wireless_ds4_game_bridge_run_passive(
     (void)unlink("/data/poords4/game-pad-bridge-last.txt");
     report_fd = open(
         "/data/poords4/game-pad-bridge-last.txt",
-        O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        O_RDWR | O_CREAT | O_TRUNC, 0600);
     char archive_path[160];
     int archive_length = snprintf(
         archive_path, sizeof(archive_path),
@@ -6900,6 +6902,7 @@ done:
         result = POORDS4_GAME_BRIDGE_IMAGE_CHANGED;
     if (result != 1)
         report_printf(report_fd, "result=%d\n", result);
+    (void)poords4_capture_first_failure(report_fd, result);
     if (report_fd >= 0)
         close(report_fd);
     if (g_report_archive_fd >= 0) {

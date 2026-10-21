@@ -17,6 +17,10 @@ PoorDS4 also depends on and gratefully acknowledges:
   EchoStretch and based on the original kstuff research, for the remote-syscall
   ABI used to allocate the game-owned bridge mapping.
 
+The first-failure report and runtime diagnostic-logging options were inspired by
+the community work of [RustedByte93](https://github.com/RustedByte93/PoorDS4-Homebrew)
+and [Paliddo86](https://github.com/Paliddo86/PoorDS4), respectively.
+
 The current tree is deliberately limited to the wireless DualShock 4 bridge.
 Ghostcontrol's USB controller implementations, launchers, research documents,
 and compiled binaries are not redistributed here; their authorship remains in

@@ -38,6 +38,7 @@ extern int sceKernelGetAppInfo(pid_t pid, app_info_t *info);
 #define GAME_BRIDGE_LOG_BACKUP POORDS4_DATA_DIR "/game-pad-bridge.log.1"
 #define GAME_BRIDGE_LOCK_FILE  POORDS4_DATA_DIR "/game-pad-bridge-supervisor.lock"
 #define GAME_BRIDGE_STATE_FILE POORDS4_DATA_DIR "/game-pad-bridge-supervisor.txt"
+#include "diagnostic_files.h"
 #define GAME_BRIDGE_LAUNCH_GRACE_MS UINT64_C(1500)
 #define SOURCE_DISCONNECT_GRACE_MS  UINT64_C(1500)
 #define SOURCE_REDISCOVERY_MS       UINT64_C(2500)
@@ -57,6 +58,7 @@ static pid_t g_reader_pid = -1;
 static intptr_t g_reader_args;
 static intptr_t g_bridge_args;
 static size_t g_log_bytes;
+static PoorDS4DiagnosticLogging g_diagnostic_logging;
 static volatile sig_atomic_t g_shutdown_requested;
 static volatile sig_atomic_t g_suspend_requested;
 static volatile sig_atomic_t g_resume_gap_detected;
@@ -1528,6 +1530,20 @@ run_game_session(pid_t reader_pid, intptr_t reader_args,
                     last_bridge_status.last_native_timestamp,
                 last_bridge_status.last_native_count,
                 last_bridge_status.import_hook_count);
+            if (poords4_diagnostic_logging(&g_diagnostic_logging, monotonic_milliseconds())) {
+                for (unsigned slot = 0; slot < POORDS4_MAX_SLOTS; ++slot) {
+                    poords4_log("[PoorDS4] DIAGNOSTIC SLOT slot=%u handle=0x%08x active=%u connected=%u native=%u simulated=%u seq=%u packets=%u state_calls=%llu read_calls=%llu\n",
+                        slot, (uint32_t)last_bridge_status.slots[slot].pad_handle,
+                        last_bridge_status.slots[slot].active,
+                        last_bridge_status.slots[slot].connected,
+                        last_bridge_status.slots[slot].is_dualsense,
+                        last_bridge_status.slots[slot].is_simulated,
+                        last_bridge_status.slots[slot].seq,
+                        last_bridge_status.slots[slot].packets,
+                        (unsigned long long)last_bridge_status.slots[slot].read_state_calls,
+                        (unsigned long long)last_bridge_status.slots[slot].read_calls);
+                }
+            }
             poords4_log("[PoorDS4] GAME RUMBLE requests=%llu sent=%llu native_ack=%llu pending=%u errors=%llu route=%u waiting=%u rebindings=%llu cancellations=%llu stale_requests=%llu status_waits=%llu\n",
                 (unsigned long long)rumble->requests,(unsigned long long)rumble->submissions,
                 (unsigned long long)rumble->acknowledgments,rumble->pending,
@@ -2038,7 +2054,7 @@ main(void)
     }
 
     poords4_log_reset();
-    poords4_log("[PoorDS4] version=" POORDS4_VERSION " build=20261020r38-client-lookup-window "
+    poords4_log("[PoorDS4] version=" POORDS4_VERSION " build=20261021r39-diagnostics "
                 "imports=plt+nonplt transport=source-reader ps4=native trigger-state=neutral-compat rumble=game-relay\n");
     (void)unlink(GAME_BRIDGE_STOP_FILE);
     (void)unlink(GAME_BRIDGE_RESET_FILE);

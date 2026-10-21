@@ -30,6 +30,8 @@
 
 ### Changed
 
+- Preserve the first failed installation report and allow optional per-controller
+  log summaries without restarting the bridge.
 - Restore the current controller implementation to the RC51 release line.
 - Add self-contained compiled host checks and a clearer source/build guide.
 - Keep normal controller, status and stop payloads separate.

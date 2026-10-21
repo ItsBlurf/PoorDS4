@@ -10,6 +10,7 @@ The suite extracts named production functions and compiles them with explicit
 Sony API and memory/transport models. It covers:
 
 - State and queued reads, sample bounds, native passthrough and disconnected sources.
+- Bounded first-failure capture, partial I/O errors and optional diagnostic logging.
 - Empty-read continuity without duplicate events.
 - Connection metadata and source generations.
 - Import/NID matching, ordinary relocations and SDK symbol extents.
