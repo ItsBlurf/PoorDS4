@@ -8023,7 +8023,11 @@ game_cache_table_reference_stride(const uint8_t *code, size_t size, size_t at)
         return 0;
     unsigned table_reg = ((code[at + 2u] >> 3) & 7u) |
         ((code[at] & 4u) ? 8u : 0u);
-    size_t lookup_end = at + 39u < size ? at + 39u : size;
+    /* The loop setup and alignment precede the handle load on some library
+     * builds. Keep it in the same bounded window as the stride/span checks;
+     * a shorter window can miss both real references and select a mutex via
+     * the unanchored fallback. The SIB must still use this table register. */
+    size_t lookup_end = at + 96u < size ? at + 96u : size;
     int handle_lookup = 0;
     for (size_t p = at + 7u; p + 4u <= lookup_end; ++p) {
         size_t op = p;

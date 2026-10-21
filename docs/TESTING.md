@@ -58,3 +58,11 @@ remain separate field checks.
 Mixed DS4/DualSense gameplay has also been checked with either controller as
 player one, reconnecting either device, and reopening a saved co-op run. Both
 players retained independent input. These checks used one DS4 and one DualSense.
+
+The latest table-locator correction is covered by longer lookup loops, both
+record strides, extended registers, native-first ordering, high client indexes,
+invalid records and ambiguous-table rejection. Captured failing instructions
+select the correct table in host and PS5 controls; the previous locator selects
+a synchronization record instead. The copied reader and game callbacks are
+unchanged from the earlier gameplay-tested build. Gameplay in the affected
+Isaac setup still needs a retest.

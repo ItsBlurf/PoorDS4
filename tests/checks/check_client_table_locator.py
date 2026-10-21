@@ -55,22 +55,33 @@ static void lea(size_t at,unsigned reg,size_t target){
  image[at]=0x48;image[at+1]=0x8d;image[at+2]=(unsigned char)(5+(reg<<3));
  u32(at+3,(uint32_t)(target-at-7));
 }
-static void setup(uint32_t stride){
+static void setup_delayed(uint32_t stride,unsigned delay,int extended){
  memset(image,0,sizeof image);
  /* A library synchronization prefix looks like one inactive client at -16. */
  u32(0x20024,0x200);u32(0x2002c,8);
  lea(0x1610,7,0x20028);
  lea(0x1630,1,0x20018);
+ if(extended)image[0x1630]=0x4c; /* r9 instead of rcx */
  const unsigned char lookup[]={0x8b,0x54,0x08,0x1c,0x39,0xfa,0x48,0x05,0,0,0,0,0x48,0x3d,0,0,0,0,0x75,0xea};
- memcpy(image+0x1637,lookup,sizeof lookup);
- u32(0x1637+8,stride);u32(0x1637+14,24*stride);
+ memset(image+0x1637,0x90,delay);
+ size_t at=0x1637+delay;
+ if(extended)image[at++]=0x42; /* index r9 in the SIB handle load */
+ memcpy(image+at,lookup,sizeof lookup);
+ u32(at+8,stride);u32(at+14,24*stride);
 }
+static void setup(uint32_t stride){setup_delayed(stride,0,0);}
 static void client(unsigned slot,uint32_t stride,int user,int native){
  size_t at=0x20018+slot*stride;
  u32(at+0x18,native?1:0);u32(at+0x1c,0x03000700u+slot);u32(at+0x24,(uint32_t)user);
  if(native){image[at+0x60]=0x4c;image[at+0x61]=0x05;image[at+0x62]=0xe6;image[at+0x63]=0x0c;}
 }
 static unsigned cases,failed;
+static void rejects_anchor(const char *name){
+ cases++;
+ if(game_cache_table_reference_stride(image+0x1610,0x800,0x20)!=0){
+  failed++;printf("FAIL unexpected_anchor=%s\n",name);
+ }
+}
 static void check(const char *name,int source,int expect_table,uint32_t expected_stride){
  intptr_t table=0;uint32_t stride=0;cases++;
  int rc=game_cache_find_table(7,BASE,sizeof image,BASE+0x2a80,source,0,-1,&table,&stride);
@@ -81,6 +92,22 @@ int main(int argc,char **argv){
  for(unsigned profile=0;profile<2;profile++){
   uint32_t stride=profile?0x548:0x5c8;
   setup(stride);check("before_clients_open",11,1,stride);
+  setup(stride);image[0x1630]=0x4c;rejects_anchor("different_table_register");
+  setup(stride);image[0x1637]=0x90;rejects_anchor("missing_handle_load");
+  setup(stride);u32(0x1637+8,0x11111111);rejects_anchor("unsupported_stride");
+  setup(stride);u32(0x1637+14,0);rejects_anchor("missing_span");
+  setup_delayed(stride,94,0);rejects_anchor("outside_bounded_window");
+  setup(stride);client(0,stride,11,0);u32(0x20018+0x18,2);
+  check("invalid_connected_field",11,0,stride);
+  setup(stride);memcpy(image+0x1700,image+0x1630,27);lea(0x1700,1,0x21018);
+  check("ambiguous_anchored_tables",11,0,stride);
+  /* Alignment and loop setup can place the first handle load farther from
+   * the table LEA. Both an empty table and native-first order must work. */
+  for(unsigned delay=24;delay<=49;delay++)for(int extended=0;extended<2;extended++){
+   setup_delayed(stride,delay,extended);check("delayed_empty_lookup",11,1,stride);
+   setup_delayed(stride,delay,extended);client(0,stride,22,1);client(8,stride,11,0);
+   check("delayed_native_first_lookup",11,1,stride);
+  }
   setup(stride);client(0,stride,22,1);check("native_before_ds4_open",11,1,stride);
   setup(stride);client(0,stride,22,1);client(1,stride,11,0);check("native_first_ds4_second",11,1,stride);
   setup(stride);client(0,stride,11,0);client(1,stride,22,1);check("ds4_first_native_second",11,1,stride);

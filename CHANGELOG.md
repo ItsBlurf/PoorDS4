@@ -11,6 +11,9 @@
 
 ### Fixed
 
+- Recognize longer controller-handle lookup loops, preventing an unrelated
+  synchronization record from being mistaken for the controller table and
+  leaving Isaac without input despite the active notification.
 - Discover callable pad imports in ordinary relocation tables as well as PLT tables.
 - Preserve complete import/NID identity and padded SDK symbol boundaries.
 - Keep source ownership and native controller attribution separate across users and client indexes.
@@ -33,11 +36,14 @@
 
 ### Validation
 
-The regression suite passes on Windows and Linux. Eden input and Isaac
+The regression suite passes on Windows and Linux. Earlier builds in this
+release line confirmed Eden input and Isaac
 Repentance gameplay with a DS4 alone or a DS4 and DualSense have been confirmed
 on 11.60. Continuing a saved co-op run still requires controllers for its
 existing players. Multiplayer with several DS4s, other firmware versions and
-additional connection orders need more testing. DS4 vibration does not work in
+additional connection orders need more testing. The latest controller-table
+correction passes captured-code controls on a PS5; affected Isaac gameplay
+still needs a retest. DS4 vibration does not work in
 this build. The DS4 also lacks the DualSense's haptic actuators and
 adaptive-trigger hardware, so those effects are not supported. Vibration
 support is a low priority for now, but ideas, technical findings and pull
