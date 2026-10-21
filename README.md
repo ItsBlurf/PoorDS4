@@ -18,8 +18,8 @@ changes. Native DualSense controllers keep their own input path.
 3. Start a native PS5 game or homebrew application. The payload attaches automatically.
 
 Use the filename supplied with a published release when installing that release.
-The current source targets **v0.2.0**, an unreleased compatibility update
-incorporating the controller repairs made since RC51.
+**v0.2.0** brings together the controller compatibility and recovery fixes
+made since RC51.
 See [what changed](CHANGELOG.md) and the [firmware requirements](docs/FIRMWARE_SUPPORT.md).
 
 ## Features

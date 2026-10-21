@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.2.0 — Unreleased
+## v0.2.0 — 21 October 2026
 
 - Bind newly opened game clients to their independently observed DS4 user before
   the game's first controller-information check, including multiplayer joins.
