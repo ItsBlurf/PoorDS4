@@ -75,3 +75,27 @@ PoorDS4 builds on [Ghostcontrol](https://github.com/StonedModder/Ghostcontrol-PS
 with the [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) and
 [kstuff-lite](https://github.com/EchoStretch/kstuff-lite).
 See [NOTICE](NOTICE.md) for attribution. Licensed under [GPL-3.0-or-later](LICENSE).
+
+## Donations & Support
+
+Donations help with development, additional controllers and testing equipment.
+
+- **PayPal:** [paypal.me/nblurf](https://paypal.me/nblurf)
+- **Bitcoin (BTC):** `1CW8JWSnWc5w7yKhYk7ixAFG487nU5Jrzc`
+- **USDT (TRC20):** `TRcrCeonXzgyxjR4LGzo4JdfEHYGGqD3gX`
+
+Bug reports, test logs and contributions are also welcome.
+
+## Disclaimer
+
+PoorDS4 is an independent, open-source project for controller interoperability,
+not affiliated with or endorsed by Sony. Product names and trademarks belong to
+their respective owners and are used only to identify compatibility.
+
+PoorDS4 does not supply games, Sony firmware or cryptographic keys and does not
+endorse piracy or unauthorized access to copyrighted content. Use it responsibly
+and in accordance with applicable law.
+
+Provided **as is**, without warranty, to the extent permitted by law; see
+[LICENSE](LICENSE), sections 15–17. Crashes or data loss are possible—back up
+important saves. This notice does not alter the GPL license.
