@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Select the game when a launcher eboot.bin exits after starting a nested
+  executable, restoring DS4 input after the menu in Metal Gear Solid 4 and
+  Peace Walker (Master Collection Vol. 2).
+
 ## v0.2.0 — 21 October 2026
 
 - Bind newly opened game clients to their independently observed DS4 user before

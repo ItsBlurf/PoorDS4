@@ -67,6 +67,12 @@ library and controller ABI before redirecting its import slots. It handles
 both PLT and ordinary callable imports. The library's own text is unchanged.
 A bounded PS4 title classifier preserves native PS4 passthrough.
 
+Discovery and installation share one target selector. A single `eboot.bin` is
+chosen as before. Without one, a launcher may have handed off to a nested
+executable: exactly one process is accepted whose kernel name is an
+app0-relative path, whose main image is that file under `/app0`, and whose
+runtime modules are loaded. Several candidates select nothing.
+
 The table locator recognizes the handle-lookup reference and its matching
 stride/span before considering heuristic candidates. A structurally anchored
 empty table permits installation before the first controller opens. This lets

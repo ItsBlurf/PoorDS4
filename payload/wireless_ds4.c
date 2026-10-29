@@ -6218,6 +6218,265 @@ wireless_ds4_game_bridge_rebind_readers(pid_t pid, intptr_t args_address,
 #endif
 }
 
+/* Some launchers exit after starting the game from a nested executable such as
+ * /app0/mgs4/mgs4.elf, which the kernel names "mgs4/mgs4.elf". Without an
+ * eboot.bin, accept exactly one such process whose main image (handle 0) is
+ * that file under /app0 and whose runtime modules are loaded. Names are cut
+ * at 19 bytes, so a full-length name only has to prefix the image path. */
+#define GAME_BRIDGE_PROC_NAME_MAX 19u
+#define GAME_BRIDGE_NESTED_MAX 16u
+#define GAME_BRIDGE_IMAGE_PATH_MAX 256u
+
+enum {
+    GAME_BRIDGE_NESTED_SELECTED = 1,
+    GAME_BRIDGE_NESTED_WAIT_IMAGE,
+    GAME_BRIDGE_NESTED_WAIT_MODULES,
+    GAME_BRIDGE_NESTED_NOT_APP
+};
+
+static pid_t g_nested_log_pid = -1;
+static int g_nested_log_state;
+static int g_nested_log_ambiguous;
+
+static int
+game_bridge_nested_name_ok(const char *name, size_t length)
+{
+    int slash = 0;
+    if (!name || length < 3 || name[0] == '/' || name[length - 1u] == '/')
+        return 0;
+    for (size_t i = 0; i < length; ++i) {
+        unsigned char c = (unsigned char)name[i];
+        if (c <= 0x20u || c >= 0x7fu)
+            return 0;
+        if (c == '/')
+            slash = 1;
+        if (c == '.' && i + 1u < length && name[i + 1u] == '.')
+            return 0;
+    }
+    return slash;
+}
+
+static int
+game_bridge_main_image_path(pid_t pid, char *out, size_t out_size)
+{
+    if (pid <= 0 || !out || out_size < 2u)
+        return -1;
+    memset(out, 0, out_size);
+    uint64_t proc = (uint64_t)kernel_get_proc(pid);
+    uint64_t shared_object = 0;
+    uint64_t object_address = 0;
+    if (!proc || kernel_copyout(
+            proc + 0x3e8, &shared_object, sizeof(shared_object)) != 0 ||
+        !shared_object || kernel_copyout(
+            shared_object, &object_address, sizeof(object_address)) != 0)
+        return -1;
+    for (unsigned index = 0; object_address && index < 512u; ++index) {
+        GameBridgeDynlibObjectPrefix object;
+        memset(&object, 0, sizeof(object));
+        if (kernel_copyout(
+                (intptr_t)object_address, &object, sizeof(object)) != 0)
+            return -1;
+        object_address = object.next;
+        if (object.handle != 0)
+            continue;
+        if (!object.path || kernel_copyout(
+                (intptr_t)object.path, out, out_size - 1u) != 0)
+            return -1;
+        out[out_size - 1u] = '\0';
+        return out[0] ? 0 : -1;
+    }
+    return -1;
+}
+
+static int
+game_bridge_nested_image_ok(const char *name, size_t name_length,
+                            const char *path)
+{
+    static const char root[] = "/app0/";
+    const size_t root_length = sizeof(root) - 1u;
+    size_t length = 0;
+    while (length < GAME_BRIDGE_IMAGE_PATH_MAX && path[length])
+        ++length;
+    if (length < root_length + name_length || length < 4u ||
+        memcmp(path + length - 4u, ".elf", 4u) != 0)
+        return 0;
+    if (name_length < GAME_BRIDGE_PROC_NAME_MAX) {
+        size_t start = length - name_length - root_length;
+        return memcmp(path + start, root, root_length) == 0 &&
+               memcmp(path + start + root_length, name, name_length) == 0;
+    }
+    for (size_t start = 0; start + root_length + name_length <= length;
+         ++start) {
+        if (memcmp(path + start, root, root_length) == 0 &&
+            memcmp(path + start + root_length, name, name_length) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static int
+game_bridge_target_modules_ready(pid_t pid)
+{
+    uint32_t libpad = 0;
+    uint32_t libc = 0;
+    uint32_t libkernel = 0;
+    return get_lib_quiet(pid, "libScePad", &libpad) == 0 &&
+           get_lib_quiet(pid, "libSceLibcInternal", &libc) == 0 &&
+           (get_lib_quiet(pid, "libkernel_sys", &libkernel) == 0 ||
+            get_lib_quiet(pid, "libkernel", &libkernel) == 0 ||
+            get_lib_quiet(pid, "libkernel_web", &libkernel) == 0);
+}
+
+static void
+game_bridge_nested_log(pid_t pid, int state, const char *name,
+                       const char *path)
+{
+    static const char *const states[] = {
+        "?", "selected", "waiting_image", "waiting_modules", "not_app0"};
+    if (pid == g_nested_log_pid && state == g_nested_log_state)
+        return;
+    g_nested_log_pid = pid;
+    g_nested_log_state = state;
+    poords4_log("[PoorDS4] nested game pid=%d name=%s image=%s state=%s\n",
+                pid, name, path,
+                state > 0 && state <= GAME_BRIDGE_NESTED_NOT_APP
+                    ? states[state] : states[0]);
+}
+
+/* 1 selected, -2 none, -3 ambiguous or malformed list, -4 still loading. */
+static int
+game_bridge_find_nested_target(pid_t *out_pid)
+{
+    int mib[4] = {1, 14, 8, 0};
+    pid_t mypid = getpid();
+    size_t buf_size = 0;
+    pid_t seen[GAME_BRIDGE_NESTED_MAX];
+    size_t seen_count = 0;
+    pid_t chosen = -1;
+    pid_t pending = -1;
+    unsigned pending_count = 0;
+    int ambiguous = 0;
+    char name[GAME_BRIDGE_IMAGE_PATH_MAX];
+    char path[GAME_BRIDGE_IMAGE_PATH_MAX];
+
+    if (out_pid)
+        *out_pid = -1;
+    if (sysctl(mib, 4, NULL, &buf_size, NULL, 0) || buf_size == 0 ||
+        buf_size > 4u * 1024u * 1024u)
+        return -2;
+    size_t alloc_size = buf_size;
+    uint8_t *buf = malloc(alloc_size);
+    if (!buf)
+        return -2;
+    if (sysctl(mib, 4, buf, &buf_size, NULL, 0) || buf_size > alloc_size) {
+        free(buf);
+        return -2;
+    }
+    const uint8_t *end = buf + buf_size;
+    for (uint8_t *ptr = buf; ptr < end;) {
+        if ((size_t)(end - ptr) < sizeof(int)) {
+            ambiguous = 1;
+            break;
+        }
+        int ki_structsize = 0;
+        memcpy(&ki_structsize, ptr, sizeof(ki_structsize));
+        if (ki_structsize < 448 ||
+            (size_t)ki_structsize > (size_t)(end - ptr)) {
+            ambiguous = 1;
+            break;
+        }
+        pid_t ki_pid = 0;
+        memcpy(&ki_pid, ptr + 72, sizeof(ki_pid));
+        const char *ki_tdname = (const char *)&ptr[447];
+        size_t limit = (size_t)ki_structsize - 447u;
+        size_t length = 0;
+        while (length < limit && ki_tdname[length] != '\0')
+            length++;
+        ptr += (size_t)ki_structsize;
+        if (ki_pid <= 0 || ki_pid == mypid || length == limit ||
+            length >= sizeof(name) ||
+            !game_bridge_nested_name_ok(ki_tdname, length))
+            continue;
+        int repeat = 0;
+        for (size_t i = 0; i < seen_count; ++i)
+            repeat |= seen[i] == ki_pid;
+        if (repeat)
+            continue;
+        if (seen_count >= GAME_BRIDGE_NESTED_MAX) {
+            ambiguous = 1;
+            break;
+        }
+        seen[seen_count++] = ki_pid;
+        memcpy(name, ki_tdname, length);
+        name[length] = '\0';
+
+        if (game_bridge_main_image_path(ki_pid, path, sizeof(path)) != 0) {
+            game_bridge_nested_log(
+                ki_pid, GAME_BRIDGE_NESTED_WAIT_IMAGE, name, "");
+            pending = ki_pid;
+            pending_count++;
+            continue;
+        }
+        if (!game_bridge_nested_image_ok(name, length, path)) {
+            game_bridge_nested_log(
+                ki_pid, GAME_BRIDGE_NESTED_NOT_APP, name, path);
+            continue;
+        }
+        if (!game_bridge_target_modules_ready(ki_pid)) {
+            game_bridge_nested_log(
+                ki_pid, GAME_BRIDGE_NESTED_WAIT_MODULES, name, path);
+            pending = ki_pid;
+            pending_count++;
+            continue;
+        }
+        if (chosen > 0) {
+            ambiguous = 1;
+            break;
+        }
+        chosen = ki_pid;
+        game_bridge_nested_log(
+            ki_pid, GAME_BRIDGE_NESTED_SELECTED, name, path);
+    }
+    free(buf);
+    if (ambiguous) {
+        if (!g_nested_log_ambiguous)
+            poords4_log("[PoorDS4] nested game list ambiguous; "
+                        "no process selected\n");
+        g_nested_log_ambiguous = 1;
+        return -3;
+    }
+    g_nested_log_ambiguous = 0;
+    if (chosen > 0) {
+        if (out_pid)
+            *out_pid = chosen;
+        return 1;
+    }
+    if (pending_count) {
+        if (out_pid && pending_count == 1u)
+            *out_pid = pending;
+        return -4;
+    }
+    return -2;
+}
+
+/* Shared by discovery and installation so both choose the same process. */
+static int
+game_bridge_select_target(pid_t *out_pid)
+{
+    pid_t pids[8];
+    if (out_pid)
+        *out_pid = -1;
+    size_t count = find_pids("eboot.bin", pids, 8);
+    if (count > 1)
+        return -3;
+    if (count == 1) {
+        if (out_pid)
+            *out_pid = pids[0];
+        return 1;
+    }
+    return game_bridge_find_nested_target(out_pid);
+}
+
 static int
 wireless_ds4_game_bridge_run_passive(
     const PoorDS4PadSource *source, pid_t *out_game_pid,
@@ -6227,7 +6486,6 @@ wireless_ds4_game_bridge_run_passive(
     (void)source; (void)out_game_pid; (void)out_args_kaddr;
     return -1;
 #else
-    pid_t pids[8];
     int report_fd = -1;
     int result = -1;
     uint32_t patched_count = 0;
@@ -6244,12 +6502,10 @@ wireless_ds4_game_bridge_run_passive(
         source->pad_index < 0 || source->pad_index >= 8)
         return -1;
 
-    size_t process_count = find_pids("eboot.bin", pids, 8);
-    if (process_count == 0)
-        return -2;
-    if (process_count != 1)
-        return -3;
-    pid_t target = pids[0];
+    pid_t target = -1;
+    int target_result = game_bridge_select_target(&target);
+    if (target_result != 1)
+        return target_result == -3 ? -3 : -2;
     if (out_game_pid)
         *out_game_pid = target;
 
@@ -6940,15 +7196,15 @@ wireless_ds4_game_bridge_find_target(pid_t *out_game_pid)
     (void)out_game_pid;
     return -1;
 #else
-    pid_t pids[8];
+    pid_t target = -1;
     if (out_game_pid)
         *out_game_pid = -1;
-    size_t count = find_pids("eboot.bin", pids, 8);
-    if (count == 0)
-        return -2;
-    if (count != 1)
-        return -3;
-    pid_t target = pids[0];
+    int target_result = game_bridge_select_target(&target);
+    if (target_result != 1) {
+        if (target_result == -4 && out_game_pid)
+            *out_game_pid = target;
+        return target_result;
+    }
     if (out_game_pid)
         *out_game_pid = target;
     if (game_bridge_is_native_ps4(target))
