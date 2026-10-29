@@ -17,6 +17,7 @@ PAYLOAD_CHECKS = (
     "device_class_import", "trigger_effect_import", "trigger_effect_controls",
     "trigger_effect_concurrency", "trigger_queued_transport",
     "reader_rumble_channel", "game_rumble_path", "recorded_client_routing",
+    "nested_game_target",
 )
 ROOT_CHECKS = ("rc51_recovery", "rc51_trigger_path", "trigger_state_compat")
 

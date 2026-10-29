@@ -120,6 +120,11 @@ if 'game_bridge_is_native_ps4(' in source:
     start = source.rfind('typedef struct {', 0, end)
     app_info_type = source[start:end] + '\n'
     app_guard = 'static int\n' + function(source, 'game_bridge_is_native_ps4') + '\n'
+if 'game_bridge_select_target(' in source:
+    # This model always has an eboot.bin, so the nested scan is never reached.
+    app_guard += ('static int game_bridge_find_nested_target(pid_t *pid) {\n'
+                  '    (void)pid; lib_queries += 1000; return -2;\n}\n'
+                  'static int\n' + function(source, 'game_bridge_select_target') + '\n')
 readiness = r'''
 #include <stdint.h>
 #include <stddef.h>
