@@ -36,7 +36,20 @@ body:
     validations:
       required: true
   - type: textarea
+    id: application_state
+    attributes:
+      label: Console UI state when the issue occurs
+      description: >-
+        For background-input issues, note whether Home, Control Center,
+        trophies/settings or another app was open. Include the order and
+        approximate time of each transition, and whether returning to the
+        game stopped the input.
+  - type: textarea
     id: diagnostics
     attributes:
       label: Diagnostics
-      description: Attach fresh status/runtime logs. Remove console addresses, account identifiers and other private information.
+      description: >-
+        Attach a fresh report from `PoorDS4-status.elf` and
+        `/data/poords4/game-pad-bridge.log`. For background-input reports,
+        include the `app-focus` lines around each UI transition. Remove console
+        addresses, account identifiers and other private information.
