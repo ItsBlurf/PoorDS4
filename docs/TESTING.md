@@ -13,7 +13,7 @@ Sony API and memory/transport models. It covers:
 - Bounded first-failure capture, partial I/O errors and optional diagnostic logging.
 - Empty-read continuity without duplicate events.
 - Connection metadata and source generations.
-- Import/NID matching, ordinary relocations and SDK symbol extents.
+- Import/NID matching, ordinary relocations, modules linked above address zero and SDK symbol extents.
 - Controller attribution, high client indexes and source-user ordering.
 - Anchored table discovery before clients open, first information queries,
   recreated handles, duplicate-user clients and native index reuse.

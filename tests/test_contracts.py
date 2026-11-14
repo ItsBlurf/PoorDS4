@@ -14,7 +14,7 @@ PAYLOAD_CHECKS = (
     "input_api_guards", "client_table_locator", "lego_empty_read", "reader_snapshot",
     "reader_handle_cleanup", "source_device_discovery", "discovery_stop_ownership", "reader_route_recovery",
     "primary_neutral_route", "game_image_recovery", "device_class_observer",
-    "device_class_import", "trigger_effect_import", "trigger_effect_controls",
+    "device_class_import", "trigger_effect_import", "import_link_base", "trigger_effect_controls",
     "trigger_effect_concurrency", "trigger_queued_transport",
     "reader_rumble_channel", "game_rumble_path", "recorded_client_routing",
 )

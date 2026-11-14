@@ -4815,6 +4815,43 @@ game_bridge_read_import_name(pid_t target,intptr_t address,uint64_t remaining,ch
     return 0;
 }
 
+/* The loaded address of an import slot. rtld places every segment at
+ * mapbase + p_vaddr, so a slot is at mapbase + r_offset. A module linked at
+ * zero lies in [mapbase, mapbase + mapsize). A module linked higher (the
+ * prospero-win title shell links at 0x100000000) has its segments outside
+ * that span; its slot must then lie inside one of the module's own segments
+ * as rtld lists them. Only a whole slot is returned. */
+static int
+game_bridge_import_slot_address(const GameBridgeDynlibObjectPrefix *object,
+                                uint64_t offset, intptr_t *out_slot)
+{
+    if (!object || !out_slot || !object->mapbase ||
+        offset > UINT64_C(0x0000800000000000) - sizeof(uint64_t) ||
+        object->mapbase > UINT64_C(0x0000800000000000) -
+            sizeof(uint64_t) - offset)
+        return -1;
+    uint64_t slot = object->mapbase + offset;
+    int inside = object->mapsize >= sizeof(uint64_t) &&
+        offset <= object->mapsize - sizeof(uint64_t);
+    if (!inside && object->sections && object->section_count <= 32u) {
+        for (uint64_t index = 0; !inside && index < object->section_count;
+             ++index) {
+            GameBridgeSharedLibSection section;
+            memset(&section, 0, sizeof(section));
+            if (kernel_copyout((intptr_t)(object->sections +
+                    index * sizeof(section)), &section, sizeof(section)) != 0)
+                return -1;
+            inside = section.length >= sizeof(uint64_t) &&
+                slot >= section.address &&
+                slot - section.address <= section.length - sizeof(uint64_t);
+        }
+    }
+    if (!inside)
+        return -1;
+    *out_slot = (intptr_t)slot;
+    return 0;
+}
+
 static int
 game_bridge_symbol_kind(const char *name, const char nids[POORDS4_GAME_BRIDGE_API_COUNT][12], const char *const names[POORDS4_GAME_BRIDGE_API_COUNT])
 {
@@ -5048,12 +5085,15 @@ game_bridge_collect_import_hooks(
         report_printf(report_fd,
             "import_metadata object=%u handle=0x%llx path=%s "
             "symtab=0x%llx symbytes=0x%llx strtab=0x%llx strbytes=0x%llx "
-            "plt=0x%llx pltbytes=0x%llx rela=0x%llx relabytes=0x%llx\n",
+            "plt=0x%llx pltbytes=0x%llx rela=0x%llx relabytes=0x%llx "
+            "mapbase=0x%llx mapsize=0x%llx sections=%llu\n",
             object_count - 1u, (unsigned long long)object.handle, object_path,
             (unsigned long long)section.symtab, (unsigned long long)section.symtab_size,
             (unsigned long long)section.strtab, (unsigned long long)section.strtab_size,
             (unsigned long long)section.plt_rela, (unsigned long long)section.plt_rela_size,
-            (unsigned long long)section.rela, (unsigned long long)section.rela_size);
+            (unsigned long long)section.rela, (unsigned long long)section.rela_size,
+            (unsigned long long)object.mapbase, (unsigned long long)object.mapsize,
+            (unsigned long long)object.section_count);
         if (section.symtab_size < sizeof(Elf64_Sym) || section.strtab_size == 0 ||
             section.symtab_size > UINT64_C(0x02000000) ||
             section.strtab_size > UINT64_C(0x02000000) ||
@@ -5142,13 +5182,13 @@ game_bridge_collect_import_hooks(
                 section.strtab_size-symbol.st_name,symbol_name);
             int kind = name_read == 0
                 ? game_bridge_symbol_kind(symbol_name, nids, names) : -1;
-            if (name_read == 0 && kind < 0 &&
-                rela.r_offset <= object.mapsize - sizeof(uint64_t)) {
-                intptr_t check_slot = (intptr_t)(
-                    object.mapbase + rela.r_offset);
+            intptr_t slot = 0;
+            int slot_mapped = game_bridge_import_slot_address(
+                &object, rela.r_offset, &slot) == 0;
+            if (name_read == 0 && kind < 0 && slot_mapped) {
                 uint64_t check_val = 0;
-                if (check_slot > 0 && remote_reader_copyout(
-                        target, check_slot, &check_val, sizeof(check_val)) == 0) {
+                if (slot > 0 && remote_reader_copyout(
+                        target, slot, &check_val, sizeof(check_val)) == 0) {
                     for (unsigned candidate_kind = 0;
                          candidate_kind < POORDS4_GAME_BRIDGE_API_COUNT; ++candidate_kind) {
                         if (originals[candidate_kind]>0 && check_val == (uint64_t)originals[candidate_kind]) {
@@ -5159,11 +5199,9 @@ game_bridge_collect_import_hooks(
                 }
             }
             if (name_read != 0) {
-                if (rela.r_offset >
-                        object.mapsize - sizeof(uint64_t))
+                if (!slot_mapped)
                     continue;
-                intptr_t fallback_slot = (intptr_t)(
-                    object.mapbase + rela.r_offset);
+                intptr_t fallback_slot = slot;
                 uint64_t fallback_current = 0;
                 if (fallback_slot <= 0 || remote_reader_copyout(
                         target, fallback_slot, &fallback_current,
@@ -5218,10 +5256,19 @@ game_bridge_collect_import_hooks(
                     return -1;
                 }
             }
-            if (kind < 0 || originals[kind] <= 0 ||
-                rela.r_offset > object.mapsize - sizeof(uint64_t))
+            if (kind < 0 || originals[kind] <= 0)
                 continue;
-            intptr_t slot = (intptr_t)(object.mapbase + rela.r_offset);
+            if (!slot_mapped) {
+                report_printf(
+                    report_fd,
+                    "import_slot_skipped unmapped object=%u kind=%d "
+                    "offset=0x%llx mapbase=0x%llx mapsize=0x%llx\n",
+                    object_count - 1u, kind,
+                    (unsigned long long)rela.r_offset,
+                    (unsigned long long)object.mapbase,
+                    (unsigned long long)object.mapsize);
+                continue;
+            }
             uint64_t current = 0;
             if (slot <= 0 || remote_reader_copyout(
                     target, slot, &current, sizeof(current)) != 0) {

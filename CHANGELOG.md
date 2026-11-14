@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Hook the pad imports of executables linked above address zero, such as the
+  Wine title shells of Playden and PC5 games, whose import slots lie outside the
+  module's first mapping (#49, #59).
+
 ## v0.2.0 — 21 October 2026
 
 - Bind newly opened game clients to their independently observed DS4 user before
