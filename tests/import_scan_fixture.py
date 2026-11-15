@@ -14,7 +14,9 @@ def scanner_program(source, body):
     if '\ngame_bridge_metadata_span_valid(' in source:
         helper+='static int\n'+function(source,'game_bridge_metadata_span_valid')+'\n'
     if '\ngame_bridge_read_import_name(' in source:
-        helper+='static int\n'+function(source,'game_bridge_read_import_name')
+        helper+='static int\n'+function(source,'game_bridge_read_import_name')+'\n'
+    if '\ngame_bridge_import_slot_address(' in source:
+        helper+='static int\n'+function(source,'game_bridge_import_slot_address')
     program = r'''
 #include <stdint.h>
 #include <stddef.h>
